@@ -18,6 +18,20 @@ where the shell mangles the URL before this program ever sees it, so quoting is 
   everything after it is lost
 - zsh, which refuses an unmatched `?` glob outright with "no matches found"
 
+## Install
+
+```
+curl -fsSL https://raw.githubusercontent.com/BrandtChristian/asciiplay/main/install.sh | sh
+```
+
+Fetches a single static binary into `~/.local/bin`, verifies its checksum, then reports on
+ffmpeg and yt-dlp and prints the one command each needs. It does not run your package manager
+for you: this is a script piped into a shell from the internet, and that is more trust than it
+has earned.
+
+Linux x86_64 and macOS on both architectures. Anything else builds from source with
+`cargo build --release`.
+
 ## Requirements
 
 ffmpeg (with ffprobe) on PATH. That is the only runtime dependency: the binary is statically

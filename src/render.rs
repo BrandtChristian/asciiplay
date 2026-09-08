@@ -1,4 +1,5 @@
 use std::fmt;
+use unicode_width::UnicodeWidthChar;
 
 // A terminal cell is roughly twice as tall as it is wide, so a picture scaled naively onto
 // (columns, rows) comes out vertically stretched by 2x. Fonts differ, hence the override.
@@ -9,8 +10,12 @@ pub const MINIMUM_CELL_ROWS: u16 = 10;
 
 // In colour mode the colour carries the picture, so a dense ramp only adds noise: ten levels
 // is enough. In mono the glyph is the only channel there is, so the long ramp earns its keep.
-pub const COLOUR_GLYPH_RAMP: &[u8] = b" .:-=+*#%@";
-pub const MONO_GLYPH_RAMP: &[u8] = b" .`^\":;!~+?][}{)(|\\/tfjrxnuvczYUJCLQ0Zmwqpdbkhao*#MW&8%B@$";
+pub const COLOUR_GLYPH_RAMP: &str = " .:-=+*#%@";
+pub const MONO_GLYPH_RAMP: &str = " .`^\":;!~+?][}{)(|\\/tfjrxnuvczYUJCLQ0Zmwqpdbkhao*#MW&8%B@$";
+// Block Elements carry far more ink than ASCII punctuation, so the picture reads as much
+// more saturated. That is a different axis from --blocks, which buys vertical resolution
+// rather than density, and the two compose.
+pub const SHADES_GLYPH_RAMP: &str = " \u{2591}\u{2592}\u{2593}\u{2588}";
 
 // Adjacent cells almost never share an exact RGB triple once a frame has been downscaled,
 // because each cell is an average of order a hundred source pixels. Measured on real footage:
@@ -48,7 +53,8 @@ impl RenderMode {
         }
     }
 
-    fn glyph_ramp(self) -> &'static [u8] {
+    /// The ramp used when the user has not named one.
+    pub fn default_ramp(self) -> &'static str {
         match self {
             RenderMode::Mono => MONO_GLYPH_RAMP,
             RenderMode::Colour | RenderMode::Blocks => COLOUR_GLYPH_RAMP,
@@ -140,6 +146,51 @@ pub fn fit(
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum CharsetError {
+    TooShort,
+    NotSingleWidth(char),
+}
+
+impl fmt::Display for CharsetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CharsetError::TooShort => write!(f, "a charset needs at least two characters"),
+            CharsetError::NotSingleWidth(glyph) => write!(
+                f,
+                "{glyph:?} is not one cell wide, which would shear every row after it"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CharsetError {}
+
+/// Turn a `--charset` value into a ramp, dark to light.
+///
+/// Accepts a preset name or a literal string of glyphs. Every glyph must occupy exactly one
+/// terminal cell: a wide or zero width character would push the rest of its row out of
+/// alignment with the colour grid, and the damage is invisible in the code that emits it.
+pub fn resolve_charset(value: &str, mode: RenderMode) -> Result<Vec<char>, CharsetError> {
+    let literal = match value {
+        "ascii" => COLOUR_GLYPH_RAMP,
+        "long" => MONO_GLYPH_RAMP,
+        "shades" => SHADES_GLYPH_RAMP,
+        "default" => mode.default_ramp(),
+        other => other,
+    };
+    let glyphs: Vec<char> = literal.chars().collect();
+    if glyphs.len() < 2 {
+        return Err(CharsetError::TooShort);
+    }
+    for glyph in &glyphs {
+        if UnicodeWidthChar::width(*glyph) != Some(1) {
+            return Err(CharsetError::NotSingleWidth(*glyph));
+        }
+    }
+    Ok(glyphs)
+}
+
 pub fn luminance(red: u8, green: u8, blue: u8) -> u8 {
     let weighted = LUMA_WEIGHT_RED * red as u32
         + LUMA_WEIGHT_GREEN * green as u32
@@ -147,9 +198,14 @@ pub fn luminance(red: u8, green: u8, blue: u8) -> u8 {
     (weighted >> LUMA_SHIFT) as u8
 }
 
-fn glyph_for_luminance(luminance: u8, ramp: &[u8]) -> u8 {
+fn glyph_for_luminance(luminance: u8, ramp: &[char]) -> char {
     // luminance maxes at 255, so this can never reach ramp.len() and never needs clamping.
     ramp[(luminance as usize * ramp.len()) >> LUMA_SHIFT]
+}
+
+fn push_glyph(buffer: &mut Vec<u8>, glyph: char) {
+    let mut encoded = [0u8; 4];
+    buffer.extend_from_slice(glyph.encode_utf8(&mut encoded).as_bytes());
 }
 
 fn beyond_tolerance(a: [u8; 3], b: [u8; 3], tolerance: u8) -> bool {
@@ -222,6 +278,7 @@ pub fn encode_frame(
     layout: &Layout,
     pixels: &[u8],
     mode: RenderMode,
+    ramp: &[char],
     tolerance: u8,
 ) -> Result<(), FrameSizeMismatch> {
     if pixels.len() != layout.frame_bytes() {
@@ -232,7 +289,6 @@ pub fn encode_frame(
     }
 
     buffer.clear();
-    let ramp = mode.glyph_ramp();
     let row_stride = layout.pixel_width as usize * BYTES_PER_PIXEL;
 
     for row in 0..layout.cell_rows as u32 {
@@ -252,7 +308,7 @@ pub fn encode_frame(
                 RenderMode::Mono => {
                     let offset = row as usize * row_stride + column * BYTES_PER_PIXEL;
                     let level = luminance(pixels[offset], pixels[offset + 1], pixels[offset + 2]);
-                    buffer.push(glyph_for_luminance(level, ramp));
+                    push_glyph(buffer, glyph_for_luminance(level, ramp));
                 }
                 RenderMode::Colour => {
                     let offset = row as usize * row_stride + column * BYTES_PER_PIXEL;
@@ -263,7 +319,7 @@ pub fn encode_frame(
                         last_foreground = Some(colour);
                     }
                     let level = luminance(colour[0], colour[1], colour[2]);
-                    buffer.push(glyph_for_luminance(level, ramp));
+                    push_glyph(buffer, glyph_for_luminance(level, ramp));
                 }
                 RenderMode::Blocks => {
                     let top_offset = row as usize * 2 * row_stride + column * BYTES_PER_PIXEL;
@@ -304,6 +360,61 @@ pub fn encode_frame(
 mod tests {
     use super::*;
 
+    fn colour_ramp() -> Vec<char> {
+        COLOUR_GLYPH_RAMP.chars().collect()
+    }
+
+    fn mono_ramp() -> Vec<char> {
+        MONO_GLYPH_RAMP.chars().collect()
+    }
+
+    #[test]
+    fn charset_presets_resolve() {
+        assert_eq!(
+            resolve_charset("shades", RenderMode::Colour).unwrap(),
+            vec![' ', '\u{2591}', '\u{2592}', '\u{2593}', '\u{2588}']
+        );
+        assert_eq!(
+            resolve_charset("ascii", RenderMode::Colour).unwrap().len(),
+            COLOUR_GLYPH_RAMP.chars().count()
+        );
+        // "default" follows the mode, which is what makes --mono still pick the long ramp.
+        assert_eq!(
+            resolve_charset("default", RenderMode::Mono).unwrap().len(),
+            MONO_GLYPH_RAMP.chars().count()
+        );
+    }
+
+    #[test]
+    fn a_literal_charset_is_taken_as_given() {
+        assert_eq!(
+            resolve_charset(".oO@", RenderMode::Colour).unwrap(),
+            vec!['.', 'o', 'O', '@']
+        );
+    }
+
+    #[test]
+    fn a_charset_that_would_shear_the_grid_is_refused() {
+        // Wide characters occupy two cells, so every glyph after one on the same row lands in
+        // the wrong column and the colour grid no longer lines up with the text.
+        assert_eq!(
+            resolve_charset(" \u{ff21}", RenderMode::Colour),
+            Err(CharsetError::NotSingleWidth('\u{ff21}'))
+        );
+        // Zero width joiners and combining marks fail the same test.
+        assert!(resolve_charset(" a\u{0301}", RenderMode::Colour).is_err());
+        assert_eq!(
+            resolve_charset("x", RenderMode::Colour),
+            Err(CharsetError::TooShort)
+        );
+    }
+
+    #[test]
+    fn shades_are_all_one_cell_wide() {
+        // The whole point of the preset, and the thing that would silently break the grid.
+        assert!(resolve_charset("shades", RenderMode::Colour).is_ok());
+    }
+
     fn solid(width: u32, height: u32, colour: [u8; 3]) -> Vec<u8> {
         colour
             .iter()
@@ -329,13 +440,14 @@ mod tests {
 
     #[test]
     fn glyph_index_never_leaves_the_ramp() {
-        for ramp in [COLOUR_GLYPH_RAMP, MONO_GLYPH_RAMP] {
+        for source in [COLOUR_GLYPH_RAMP, MONO_GLYPH_RAMP, SHADES_GLYPH_RAMP] {
+            let ramp: Vec<char> = source.chars().collect();
             for level in 0..=255u8 {
-                let glyph = glyph_for_luminance(level, ramp);
+                let glyph = glyph_for_luminance(level, &ramp);
                 assert!(ramp.contains(&glyph), "level {level} escaped ramp");
             }
-            assert_eq!(glyph_for_luminance(0, ramp), ramp[0]);
-            assert_eq!(glyph_for_luminance(255, ramp), ramp[ramp.len() - 1]);
+            assert_eq!(glyph_for_luminance(0, &ramp), ramp[0]);
+            assert_eq!(glyph_for_luminance(255, &ramp), ramp[ramp.len() - 1]);
         }
     }
 
@@ -413,7 +525,15 @@ mod tests {
         // White, so the glyph is the last in the ramp and the golden string is unambiguous.
         let pixels = solid(4, 2, [255, 255, 255]);
         let mut buffer = Vec::new();
-        encode_frame(&mut buffer, &layout, &pixels, RenderMode::Mono, 8).unwrap();
+        encode_frame(
+            &mut buffer,
+            &layout,
+            &pixels,
+            RenderMode::Mono,
+            &mono_ramp(),
+            8,
+        )
+        .unwrap();
         let text = String::from_utf8(buffer).unwrap();
         assert!(!text.contains("\x1b[38;2;"), "mono painted a colour");
         assert!(!text.contains("\x1b[48;2;"));
@@ -432,7 +552,15 @@ mod tests {
         };
         let pixels = solid(40, 3, [10, 120, 250]);
         let mut buffer = Vec::new();
-        encode_frame(&mut buffer, &layout, &pixels, RenderMode::Colour, 8).unwrap();
+        encode_frame(
+            &mut buffer,
+            &layout,
+            &pixels,
+            RenderMode::Colour,
+            &colour_ramp(),
+            8,
+        )
+        .unwrap();
         let text = String::from_utf8(buffer).unwrap();
         assert_eq!(
             text.matches("\x1b[38;2;").count(),
@@ -454,11 +582,27 @@ mod tests {
         // Two neighbours four apart, then one far away.
         let pixels = vec![100, 100, 100, 104, 104, 104, 250, 250, 250];
         let mut buffer = Vec::new();
-        encode_frame(&mut buffer, &layout, &pixels, RenderMode::Colour, 8).unwrap();
+        encode_frame(
+            &mut buffer,
+            &layout,
+            &pixels,
+            RenderMode::Colour,
+            &colour_ramp(),
+            8,
+        )
+        .unwrap();
         let collapsed = String::from_utf8(buffer.clone()).unwrap();
         assert_eq!(collapsed.matches("\x1b[38;2;").count(), 2);
 
-        encode_frame(&mut buffer, &layout, &pixels, RenderMode::Colour, 0).unwrap();
+        encode_frame(
+            &mut buffer,
+            &layout,
+            &pixels,
+            RenderMode::Colour,
+            &colour_ramp(),
+            0,
+        )
+        .unwrap();
         let exact = String::from_utf8(buffer).unwrap();
         assert_eq!(exact.matches("\x1b[38;2;").count(), 3);
     }
@@ -475,7 +619,15 @@ mod tests {
         };
         let pixels = vec![255, 0, 0, 0, 0, 255];
         let mut buffer = Vec::new();
-        encode_frame(&mut buffer, &layout, &pixels, RenderMode::Blocks, 8).unwrap();
+        encode_frame(
+            &mut buffer,
+            &layout,
+            &pixels,
+            RenderMode::Blocks,
+            &colour_ramp(),
+            8,
+        )
+        .unwrap();
         let text = String::from_utf8(buffer).unwrap();
         assert_eq!(
             text,
@@ -497,7 +649,15 @@ mod tests {
         // below pass for the wrong reason.
         let pixels = solid(2, 1, [255, 255, 255]);
         let mut buffer = Vec::new();
-        encode_frame(&mut buffer, &layout, &pixels, RenderMode::Mono, 8).unwrap();
+        encode_frame(
+            &mut buffer,
+            &layout,
+            &pixels,
+            RenderMode::Mono,
+            &mono_ramp(),
+            8,
+        )
+        .unwrap();
         let text = String::from_utf8(buffer).unwrap();
         assert!(text.starts_with("\x1b[4;6H"), "got {text:?}");
         assert!(!text.contains("  "), "letterbox was painted with spaces");
@@ -514,7 +674,14 @@ mod tests {
             top_pad_rows: 0,
         };
         let mut buffer = Vec::new();
-        let result = encode_frame(&mut buffer, &layout, &[0, 0, 0], RenderMode::Colour, 8);
+        let result = encode_frame(
+            &mut buffer,
+            &layout,
+            &[0, 0, 0],
+            RenderMode::Colour,
+            &colour_ramp(),
+            8,
+        );
         assert_eq!(
             result.unwrap_err(),
             FrameSizeMismatch {
@@ -536,9 +703,25 @@ mod tests {
         };
         let pixels = solid(4, 1, [30, 30, 30]);
         let mut buffer = Vec::new();
-        encode_frame(&mut buffer, &layout, &pixels, RenderMode::Mono, 8).unwrap();
+        encode_frame(
+            &mut buffer,
+            &layout,
+            &pixels,
+            RenderMode::Mono,
+            &mono_ramp(),
+            8,
+        )
+        .unwrap();
         let first = buffer.len();
-        encode_frame(&mut buffer, &layout, &pixels, RenderMode::Mono, 8).unwrap();
+        encode_frame(
+            &mut buffer,
+            &layout,
+            &pixels,
+            RenderMode::Mono,
+            &mono_ramp(),
+            8,
+        )
+        .unwrap();
         assert_eq!(buffer.len(), first);
     }
 }

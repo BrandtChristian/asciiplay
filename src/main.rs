@@ -58,6 +58,11 @@ struct Cli {
     #[arg(long, default_value_t = render::DEFAULT_COLOUR_TOLERANCE)]
     tolerance: u8,
 
+    /// Glyph ramp, darkest first. A preset (ascii, long, shades) or a literal string such as
+    /// " .oO@". Ignored by --blocks, which paints half blocks rather than glyphs
+    #[arg(long, default_value = "default", value_name = "SET")]
+    charset: String,
+
     /// Start position in seconds
     #[arg(long, default_value_t = 0.0)]
     start: f64,
@@ -110,9 +115,10 @@ fn main() -> Result<()> {
 
     let source = source::resolve(&cli.input)?;
     let mode = cli.mode();
+    let ramp = render::resolve_charset(&cli.charset, mode)?;
 
     if let Some(frame_count) = cli.dump_frames {
-        return dump(&cli, &source, mode, frame_count);
+        return dump(&cli, &source, mode, &ramp, frame_count);
     }
 
     // Rendering is hundreds of KB of escape sequences per frame. Piped into a file that is
@@ -132,13 +138,21 @@ fn main() -> Result<()> {
     let layout = layout_for(&cli, &source, mode, terminal_columns, terminal_rows)?;
 
     if let Some(frame_count) = cli.benchmark {
-        return benchmark(&cli, &source, mode, &layout, frame_count);
+        return benchmark(&cli, &source, mode, &layout, &ramp, frame_count);
     }
     eprintln!(
         "playing {} at {}x{} cells",
         source.label, layout.cell_columns, layout.cell_rows
     );
-    play(&cli, &source, mode, layout, terminal_columns, terminal_rows)
+    play(
+        &cli,
+        &source,
+        mode,
+        &ramp,
+        layout,
+        terminal_columns,
+        terminal_rows,
+    )
 }
 
 fn layout_for(
@@ -179,7 +193,13 @@ fn spawn_decoder(
     Decoder::spawn(&args, layout.frame_bytes())
 }
 
-fn dump(cli: &Cli, source: &MediaSource, mode: RenderMode, frame_count: u32) -> Result<()> {
+fn dump(
+    cli: &Cli,
+    source: &MediaSource,
+    mode: RenderMode,
+    ramp: &[char],
+    frame_count: u32,
+) -> Result<()> {
     let detected = crossterm::terminal::size().ok();
     let columns = cli
         .columns
@@ -208,7 +228,7 @@ fn dump(cli: &Cli, source: &MediaSource, mode: RenderMode, frame_count: u32) -> 
         if !decoder.read_frame(&mut frame)? {
             break;
         }
-        render::encode_frame(&mut encoded, &layout, &frame, mode, cli.tolerance)?;
+        render::encode_frame(&mut encoded, &layout, &frame, mode, ramp, cli.tolerance)?;
         out.write_all(&encoded)?;
         out.write_all(b"\n")?;
     }
@@ -224,6 +244,7 @@ fn benchmark(
     source: &MediaSource,
     mode: RenderMode,
     layout: &Layout,
+    ramp: &[char],
     frame_count: u32,
 ) -> Result<()> {
     println!(
@@ -240,7 +261,7 @@ fn benchmark(
             break;
         }
         let mut encoded = Vec::new();
-        render::encode_frame(&mut encoded, layout, &frame, mode, cli.tolerance)?;
+        render::encode_frame(&mut encoded, layout, &frame, mode, ramp, cli.tolerance)?;
         colour_runs += count_occurrences(&encoded, b"\x1b[38;2;");
         frames.push(encoded);
     }
@@ -344,6 +365,7 @@ fn play(
     cli: &Cli,
     source: &MediaSource,
     mode: RenderMode,
+    ramp: &[char],
     mut layout: Layout,
     mut terminal_columns: u16,
     mut terminal_rows: u16,
@@ -474,7 +496,7 @@ fn play(
         if position > frame_target + FRAME_DROP_LATENESS / cli.fps {
             dropped_frames += 1;
         } else {
-            render::encode_frame(&mut encoded, &layout, &frame, mode, cli.tolerance)?;
+            render::encode_frame(&mut encoded, &layout, &frame, mode, ramp, cli.tolerance)?;
             out.write_all(&encoded)?;
             presented_since_status += 1;
         }

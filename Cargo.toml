@@ -10,6 +10,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
 libc = "0.2"
+unicode-width = "0.2"
 
 [profile.release]
 opt-level = 3

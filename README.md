@@ -11,6 +11,25 @@ asciiplay "https://youtube.com/watch?v=..."
 
 `q` or Escape quits, space pauses, the arrow keys seek five seconds.
 
+## Charsets
+
+The glyph ramp is yours to choose, darkest first:
+
+```
+asciiplay clip.mp4 --charset shades      # ░▒▓█, much more saturated
+asciiplay clip.mp4 --charset long        # a 58 level ramp, most detail
+asciiplay clip.mp4 --charset " .oO@"     # anything you like
+```
+
+`ascii` is the default and nothing changes unless you ask. `shades` uses Unicode Block Elements,
+which carry far more ink than ASCII punctuation and so read as a much more solid picture. That is
+a different axis from `--blocks`, which buys vertical resolution rather than density, and the two
+compose.
+
+Every glyph must occupy exactly one terminal cell. A wide or zero width character is refused
+rather than accepted, because it would push the rest of its row out of step with the colour grid
+and the damage is invisible in the code that emits it.
+
 Quotes around a URL are optional in bash, which passes `?` through untouched. Two exceptions
 where the shell mangles the URL before this program ever sees it, so quoting is the fix:
 

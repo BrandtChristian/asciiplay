@@ -95,3 +95,31 @@ machine* becomes a portability bug the moment it is committed, and the compiler 
 because on the machine that wrote it everything is correct. The environment-variable escape hatch
 is the thing to look for, and the honest test is to reproduce the other machine's settings
 locally before pushing.
+
+## 2026-09-08: YouTube returns two URLs, needs no headers today, and hands you AV1 unless you ask
+
+Wiring up URL input turned up three things, two of which contradicted the plan.
+
+**Two URLs is the good case, not an edge case.** `yt-dlp` with a merge format selection prints
+the video-only URL then the audio-only URL, and since this design already runs a separate ffmpeg
+per track, each process fetches exactly the bytes it needs. A single progressive URL still works
+and simply goes to both. The parser therefore branches on the count rather than assuming either.
+
+**Headers turned out not to be needed.** Both reviews warned that googlevideo URLs are signed
+against the requesting client and that ffmpeg's `Lavf/` user agent can draw a 403, so the plan
+carried machinery to extract `http_headers` and translate them into `-user_agent` and `-headers`.
+Measured instead of assumed: `ffprobe` opens the resolved URL bare, exit 0, correct stream info.
+So none of that was written. `%(http_headers.User-Agent)s` also resolves to `NA` at the top level,
+because the headers live per-format, which is a second reason the shortcut would not have worked.
+If a 403 does start appearing, `yt-dlp -J` plus the per-format headers is the fix.
+
+**The format selection needs a codec preference, not just a height cap.** Capping at 720p still
+gets AV1, because that is YouTube's default at that height now, and this APU has no AV1 hardware
+decoder, so software decode would cost more CPU than the entire renderer. Asking for
+`bv*[height<=720][vcodec^=avc1]` first drops to H.264 and falls back gracefully. Verified: the
+selection goes from `av01.0.08M` to `avc1.4d4020`.
+
+**On sentinel prefixes:** every field is printed as `asciiplay-<name>:<value>` rather than relying
+on line order, so adding a field later cannot silently shift the parse. yt-dlp writes the literal
+string `NA` for anything the extractor did not fill in, which has to be filtered or a duration of
+`NA` becomes a title.

@@ -4,14 +4,36 @@ Play an ordinary video as coloured ASCII art in the terminal, with synced audio.
 
 ```
 asciiplay clip.mp4
-asciiplay clip.mp4 --mono          # single colour, glyphs only
-asciiplay clip.mp4 --blocks        # half block glyphs, double vertical resolution
+asciiplay clip.mp4 --mono                 # single colour, glyphs only
+asciiplay clip.mp4 --blocks               # half block glyphs, double vertical resolution
+asciiplay "https://youtube.com/watch?v=..."
 ```
+
+`q` or Escape quits, space pauses, the arrow keys seek five seconds.
 
 ## Requirements
 
 ffmpeg (with ffprobe) on PATH. That is the only runtime dependency: the binary is statically
-linked and needs nothing else.
+linked and needs nothing else. URLs additionally need yt-dlp:
+
+```
+uv tool install yt-dlp
+```
+
+## Find out what your terminal can take
+
+Throughput is limited by your terminal emulator rather than by this program, so measure it
+instead of guessing:
+
+```
+asciiplay clip.mp4 --benchmark 240
+```
+
+That encodes 240 real frames, then times only the writing, and reports the sustained rate. Watch
+it as well as reading the number: a high figure with visibly juddery motion means the terminal is
+parsing frames and throwing them away before it paints them, so the real ceiling is its repaint
+rate. If the answer disappoints, the levers in order of effect are `--fps`, then `--columns`,
+then `--mono`.
 
 ## Building
 

@@ -134,6 +134,10 @@ fn main() -> Result<()> {
     if let Some(frame_count) = cli.benchmark {
         return benchmark(&cli, &source, mode, &layout, frame_count);
     }
+    eprintln!(
+        "playing {} at {}x{} cells",
+        source.label, layout.cell_columns, layout.cell_rows
+    );
     play(&cli, &source, mode, layout, terminal_columns, terminal_rows)
 }
 
@@ -382,7 +386,7 @@ fn play(
                             }
                         }
                     }
-                    KeyCode::Left | KeyCode::Right => {
+                    KeyCode::Left | KeyCode::Right if source.seekable => {
                         let step = if key.code == KeyCode::Right {
                             SEEK_STEP_SECONDS
                         } else {
@@ -416,7 +420,8 @@ fn play(
                     frame = vec![0u8; layout.frame_bytes()];
                     // Only the video decoder restarts. Audio is never touched, so its clock
                     // carries straight through and a resize costs no sync at all.
-                    playback.decoder = spawn_decoder(cli, source, &layout, position)?;
+                    let restart_at = if source.seekable { position } else { 0.0 };
+                    playback.decoder = spawn_decoder(cli, source, &layout, restart_at)?;
                     playback.origin_seconds = position;
                     playback.frame_index = 0;
                     have_frame = false;

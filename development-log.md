@@ -151,3 +151,46 @@ workflows lost their override blocks entirely. The release job is now one line, 
 **The lesson, sharpened:** when a config leaks somewhere it should not, overriding it at the
 destination is a patch and the leak will find another route. There were two settings in that file
 and the patch covered one. Ask instead where the setting belongs, and put it there.
+
+## 2026-09-08: the web version, and why dropping YouTube made it better
+
+The browser player was going to resolve YouTube URLs server side and proxy the video bytes. Two
+measurements killed that before any of it was written, and the feature was dropped on Christian's
+call once they were in.
+
+**googlevideo sends no `Access-Control-Allow-Origin` header at all.** Verified with a resolved
+URL and an `Origin` header: 200, correct content type, `Accept-Ranges: bytes`, and no CORS header
+of any kind. A browser can therefore *play* such a URL but cannot read pixels from it, because
+the canvas is tainted and `getImageData` throws. So the design needed every video byte proxied
+through the server purely to add a header.
+
+**The second cost was YouTube's own posture toward datacenters**, which throttles and 403s them
+and increasingly wants a PO token, so the feature would have been the flakiest part of the site
+while also being the only part that cost money and touched other people's copyright.
+
+Dropping it deleted the resolver function, the byte proxy, the Python runtime, the bandwidth
+bill and the rate limiting in one move, and **the app became fully static**. The CLI keeps its
+YouTube support, which is a different proposition: the user's own machine, their own IP, their
+own yt-dlp.
+
+**The drawing trick worth remembering.** Painting coloured ASCII the obvious way is one
+`fillText` per cell, which is about 4000 canvas calls a frame. Instead: draw the glyphs as white
+text on one canvas, **one `fillText` per row** (monospace guarantees the columns line up), draw
+the cell grid on another with `imageSmoothingEnabled = false`, then composite the two with
+`globalCompositeOperation = "multiply"`. White times colour is colour, black times anything is
+black, so you get glyph shaped colour from about 40 draw calls. Measured 60fps at 110x31 cells,
+which is the browser's own frame cap rather than ours. Half-block mode then falls out for free:
+it is the colour field alone at double vertical resolution, with no glyphs at all.
+
+**What only a real browser could catch.** Two defects survived a green unit suite and a clean
+typecheck. The render loop wrote a ref during render, which the React lint caught but which was
+also genuinely wrong. And a `button:hover:not(:disabled)` rule outranks `button[aria-pressed]`
+on specificity, so hovering the active control painted amber text on an amber ground and the
+label vanished. Both are now guarded by end to end tests, and the second one is the reason there
+is an assertion that no pressed button's text colour equals its background.
+
+**The demo clip was measured, not chosen.** The first cut averaged luma 59 out of 255 and looked
+like a dim smudge, because ASCII of a shaded forest is mostly the dark end of the ramp working
+correctly. Sampling nine timestamps for mean luminance and saturation found a passage at 152 and
+58, and the same code suddenly looked good. Worth generalising: when a renderer looks bad, check
+the input's statistics before changing the renderer.

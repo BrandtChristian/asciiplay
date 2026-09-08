@@ -11,6 +11,13 @@ asciiplay "https://youtube.com/watch?v=..."
 
 `q` or Escape quits, space pauses, the arrow keys seek five seconds.
 
+Quotes around a URL are optional in bash, which passes `?` through untouched. Two exceptions
+where the shell mangles the URL before this program ever sees it, so quoting is the fix:
+
+- a URL containing `&`, such as `...?v=abc&t=42s`, because `&` means "run in the background" and
+  everything after it is lost
+- zsh, which refuses an unmatched `?` glob outright with "no matches found"
+
 ## Requirements
 
 ffmpeg (with ffprobe) on PATH. That is the only runtime dependency: the binary is statically

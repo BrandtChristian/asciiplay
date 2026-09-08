@@ -76,3 +76,22 @@ directly, so `read_exact` into a reused buffer is complete and correct: short re
 artefact it loops over internally, and `UnexpectedEof` means genuine end of stream. That plus a
 20-line stderr drain thread is the whole requirement, with full control of the flags and one
 fewer dependency.
+
+## 2026-09-08: a committed .cargo/config.toml follows you onto CI
+
+Nearly shipped a workflow that could never have passed. The reasoning went: `.cargo/config.toml`
+holds this machine's musl and `zig cc` settings, CI is a normal glibc runner, therefore CI is
+unaffected. Wrong. Cargo reads that file from the package directory wherever the repo is checked
+out, so the runner would have tried to build for a musl target it does not have, with a linker
+that is not installed.
+
+The fix is that **environment variables take precedence over the config file**, so the workflow
+sets `CARGO_BUILD_TARGET` and `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` back to the
+defaults. Verified locally rather than assumed: with those two variables set, the same tree
+builds a dynamically linked glibc binary, and without them it still builds static musl.
+
+**The general shape worth remembering:** a config file that encodes something about *this
+machine* becomes a portability bug the moment it is committed, and the compiler cannot warn you
+because on the machine that wrote it everything is correct. The environment-variable escape hatch
+is the thing to look for, and the honest test is to reproduce the other machine's settings
+locally before pushing.

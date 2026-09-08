@@ -7,6 +7,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # .cargo/config.toml targets static musl through rust-lld with zig cc as the host linker,
+  # because the machine this was written on has no C compiler and cannot be given one. A CI
+  # runner has cc and no musl target, so both settings are overridden back to the defaults
+  # here. Environment variables beat the config file, which is what makes this work.
+  CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: cc
 
 jobs:
   check:

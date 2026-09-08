@@ -1,0 +1,110 @@
+import { expect, test } from "@playwright/test";
+
+/**
+ * The flow that actually matters: the page arrives already playing, and the canvas is really
+ * being painted from video rather than sitting empty. Everything else on the page is a control
+ * over that one loop.
+ */
+
+async function canvasStats(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector("canvas") as HTMLCanvasElement | null;
+    if (!canvas) return null;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    let lit = 0;
+    let colourful = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      const [red, green, blue] = [data[index], data[index + 1], data[index + 2]];
+      if (red + green + blue > 30) lit += 1;
+      if (Math.max(red, green, blue) - Math.min(red, green, blue) > 25) colourful += 1;
+    }
+    const total = data.length / 4;
+    return {
+      width: canvas.width,
+      litFraction: lit / total,
+      colourfulFraction: colourful / total,
+    };
+  });
+}
+
+test("arrives playing, with a canvas painted from the video", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("canvas")).toBeVisible();
+
+  // The loop only paints once the video has a frame, so give it a moment rather than racing it.
+  await expect
+    .poll(async () => (await canvasStats(page))?.litFraction ?? 0, { timeout: 15_000 })
+    .toBeGreaterThan(0.01);
+
+  const stats = await canvasStats(page);
+  expect(stats!.width).toBeGreaterThan(200);
+  // Colour mode must actually be in colour, not accidentally painting monochrome.
+  expect(stats!.colourfulFraction).toBeGreaterThan(0.005);
+
+  await expect(page.locator(".readout")).toContainText("cells");
+});
+
+test("the picture changes over time, so it is playing and not one stuck frame", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => (await canvasStats(page))?.litFraction ?? 0, { timeout: 15_000 })
+    .toBeGreaterThan(0.01);
+
+  const fingerprint = async () =>
+    page.evaluate(() => {
+      const canvas = document.querySelector("canvas") as HTMLCanvasElement;
+      return canvas.toDataURL().slice(-2000);
+    });
+
+  const before = await fingerprint();
+  await page.waitForTimeout(1200);
+  expect(await fingerprint()).not.toBe(before);
+});
+
+test("every mode and charset paints something, and no pressed label goes invisible", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => (await canvasStats(page))?.litFraction ?? 0, { timeout: 15_000 })
+    .toBeGreaterThan(0.01);
+
+  for (const label of ["mono", "blocks", "colour", "shades", "long", "ascii"]) {
+    const button = page.getByRole("button", { name: label, exact: true });
+    if (await button.isDisabled()) continue;
+    await button.click();
+    await page.waitForTimeout(350);
+
+    const stats = await canvasStats(page);
+    expect(stats!.litFraction, `${label} painted nothing`).toBeGreaterThan(0.005);
+
+    // A pressed button whose text matches its background is unreadable. This caught a real
+    // cascade collision: the hover rule outranked the pressed rule.
+    const invisible = await page.evaluate(() =>
+      [...document.querySelectorAll('button[aria-pressed="true"]')]
+        .map((element) => {
+          const style = getComputedStyle(element);
+          return {
+            text: element.textContent,
+            color: style.color,
+            background: style.backgroundColor,
+          };
+        })
+        .filter((row) => row.color === row.background),
+    );
+    expect(invisible, `after ${label}`).toEqual([]);
+  }
+});
+
+test("copy is refused with an explanation in blocks mode", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "blocks", exact: true }).click();
+  await page.getByRole("button", { name: "copy", exact: true }).click();
+  // Blocks mode paints pixels, so there are no glyph rows to copy, and saying so beats
+  // silently copying an empty string.
+  await expect(page.locator(".readout")).toContainText("blocks mode paints pixels");
+});

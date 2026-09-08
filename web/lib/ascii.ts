@@ -9,8 +9,22 @@ export const CELL_HEIGHT_OVER_WIDTH = 2;
 export const COLOUR_GLYPH_RAMP = " .:-=+*#%@";
 
 /** In mono the glyph is the only channel there is, so the long ramp earns its keep. */
-export const MONO_GLYPH_RAMP =
-  " .`^\":;!~+?][}{)(|\\/tfjrxnuvczYUJCLQ0Zmwqpdbkhao*#MW&8%B@$";
+export const MONO_GLYPH_RAMP = ' .`^":;!~+?][}{)(|\\/tfjrxnuvczYUJCLQ0Zmwqpdbkhao*#MW&8%B@$';
+
+/**
+ * Unicode Block Elements. Far more ink per cell than ASCII punctuation, so the picture reads as
+ * much more saturated. A different axis from blocks mode, which buys vertical resolution rather
+ * than density.
+ */
+export const SHADES_GLYPH_RAMP = " \u2591\u2592\u2593\u2588";
+
+export const CHARSET_PRESETS = {
+  ascii: COLOUR_GLYPH_RAMP,
+  long: MONO_GLYPH_RAMP,
+  shades: SHADES_GLYPH_RAMP,
+} as const;
+
+export type CharsetName = keyof typeof CHARSET_PRESETS;
 
 /**
  * How far two colours may drift before a new escape is emitted.
@@ -44,7 +58,8 @@ export function verticalPixelsPerCell(mode: RenderMode): number {
   return mode === "blocks" ? 2 : 1;
 }
 
-export function glyphRamp(mode: RenderMode): string {
+/** The ramp used when the caller has not named one. */
+export function defaultRamp(mode: RenderMode): string {
   return mode === "mono" ? MONO_GLYPH_RAMP : COLOUR_GLYPH_RAMP;
 }
 
@@ -90,14 +105,18 @@ export function fitLayout(
  * Drawing a row at a time rather than a cell at a time is the difference between about 40
  * canvas calls per frame and about 4000, which is what makes this hold a frame rate at all.
  */
-export function buildGlyphRows(pixels: Uint8ClampedArray, layout: Layout, mode: RenderMode): string[] {
-  const ramp = glyphRamp(mode);
+export function buildGlyphRows(
+  pixels: Uint8ClampedArray,
+  layout: Layout,
+  mode: RenderMode,
+  ramp: string,
+): string[] {
   const rows: string[] = [];
   const perCell = verticalPixelsPerCell(mode);
   for (let row = 0; row < layout.cellRows; row += 1) {
     let line = "";
     for (let column = 0; column < layout.cellColumns; column += 1) {
-      const offset = ((row * perCell * layout.pixelWidth) + column) * 4;
+      const offset = (row * perCell * layout.pixelWidth + column) * 4;
       line += glyphForLuminance(
         luminance(pixels[offset], pixels[offset + 1], pixels[offset + 2]),
         ramp,
@@ -129,9 +148,9 @@ export function encodeAnsi(
   pixels: Uint8ClampedArray,
   layout: Layout,
   mode: RenderMode,
+  ramp: string,
   tolerance = DEFAULT_COLOUR_TOLERANCE,
 ): string {
-  const ramp = glyphRamp(mode);
   const perCell = verticalPixelsPerCell(mode);
   const parts: string[] = [];
 
@@ -142,7 +161,7 @@ export function encodeAnsi(
     let lastBackground: [number, number, number] | null = null;
 
     for (let column = 0; column < layout.cellColumns; column += 1) {
-      const top = ((row * perCell * layout.pixelWidth) + column) * 4;
+      const top = (row * perCell * layout.pixelWidth + column) * 4;
       const colour: [number, number, number] = [pixels[top], pixels[top + 1], pixels[top + 2]];
 
       if (mode === "mono") {

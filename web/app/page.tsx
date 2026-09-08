@@ -1,69 +1,54 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+import AsciiPlayer from "@/components/AsciiPlayer";
+import BootLines from "@/components/BootLines";
+
+const INSTALL_COMMAND =
+  "curl -fsSL https://raw.githubusercontent.com/BrandtChristian/asciiplay/main/install.sh | sh";
 
 export default function Home() {
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>
-            To get started, edit the{" "}
-            <code className={styles.code}>page.tsx</code> file.
-          </h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <main className="page">
+      <header className="masthead">
+        <BootLines />
+      </header>
+
+      <AsciiPlayer />
+
+      <section className="terminal-pitch">
+        <h2>It is nicer in a real terminal</h2>
+        <p>
+          The browser version re-encodes every frame from a canvas, which is why the controls
+          respond instantly. The terminal version does the same arithmetic in Rust against a raw
+          ffmpeg pipe, keeps its clock from the audio device so sound never drifts, and plays
+          YouTube URLs from your own machine.
+        </p>
+        <pre className="install">
+          <code>{INSTALL_COMMAND}</code>
+        </pre>
+        <p className="dim">
+          One static binary into <code>~/.local/bin</code>, checksum verified. It reports on ffmpeg
+          and yt-dlp and prints the command each needs, and deliberately does not run your package
+          manager for you.
+        </p>
+        <ul className="flags">
+          <li>
+            <code>--charset shades</code> Block Elements, much more saturated
+          </li>
+          <li>
+            <code>--blocks</code> half blocks, double vertical resolution
+          </li>
+          <li>
+            <code>--benchmark 240</code> what your terminal can actually take
+          </li>
+        </ul>
+      </section>
+
+      <footer className="footer">
+        <a href="https://github.com/BrandtChristian/asciiplay">source</a>
+        <span className="dim">
+          demo clip: Big Buck Bunny, (c) Blender Foundation, CC BY 3.0. mandelbrot: generated with
+          ffmpeg.
+        </span>
+      </footer>
+    </main>
   );
 }

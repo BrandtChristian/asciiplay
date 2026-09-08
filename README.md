@@ -37,6 +37,14 @@ where the shell mangles the URL before this program ever sees it, so quoting is 
   everything after it is lost
 - zsh, which refuses an unmatched `?` glob outright with "no matches found"
 
+## Try it without installing anything
+
+There is a browser version that renders ASCII from any video you drop on it. The file is read
+locally and never uploaded, which is the whole reason it has no server: the page is static.
+
+It has live controls (mode, charset, width, speed, sound), a transport, and exports to WebM, PNG,
+plain text and an asciinema `.cast` that replays in a real terminal. The source lives in `web/`.
+
 ## Install
 
 ```

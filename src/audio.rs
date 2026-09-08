@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use std::io::{BufRead, BufReader};
+#[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -129,12 +130,31 @@ pub fn audio_args(target: &str, seek_seconds: f64, buffer_milliseconds: u32) -> 
     // is machine readable and stable, unlike ffplay's human readable status line.
     args.push("-progress".into());
     args.push("pipe:1".into());
-    args.push("-f".into());
-    args.push("pulse".into());
-    args.push("-buffer_duration".into());
-    args.push(format!("{buffer_milliseconds}"));
-    args.push("asciiplay".into());
+    args.extend(audio_output_args(buffer_milliseconds));
     args
+}
+
+/// Where the decoded audio actually goes, which is the one genuinely platform specific part.
+#[cfg(target_os = "linux")]
+fn audio_output_args(buffer_milliseconds: u32) -> Vec<String> {
+    vec![
+        "-f".into(),
+        "pulse".into(),
+        // Bounds how far ahead of the clock the device buffer can sit, which is the residual
+        // offset left once the progress anchor has removed the startup skew.
+        "-buffer_duration".into(),
+        format!("{buffer_milliseconds}"),
+        "asciiplay".into(),
+    ]
+}
+
+/// UNTESTED: written without a Mac to hand. If the muxer name or sink is wrong the audio
+/// process simply fails to start, `Audio::start(..).ok()` yields None, and the video plays
+/// silently rather than the player failing.
+#[cfg(target_os = "macos")]
+fn audio_output_args(_buffer_milliseconds: u32) -> Vec<String> {
+    // -buffer_duration is a pulse option and audiotoolbox rejects it. The sink is a device index.
+    vec!["-f".into(), "audiotoolbox".into(), "0".into()]
 }
 
 /// Pull the microsecond position out of one ffmpeg progress line.
@@ -161,6 +181,10 @@ impl Audio {
         // The only mechanism that survives the player being SIGKILLed, which is what stops a
         // crash leaving audio playing into a dead terminal. It fires on the death of the
         // parent THREAD, so this must be spawned from the thread that owns playback.
+        //
+        // Linux only. Elsewhere the fallback is that our death closes this progress pipe and
+        // ffmpeg exits on EPIPE at its next write, which is within about half a second.
+        #[cfg(target_os = "linux")]
         unsafe {
             command.pre_exec(|| {
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
@@ -248,6 +272,7 @@ mod tests {
         let input = args.iter().position(|a| a == "-i").unwrap();
         assert!(seek < input);
         assert!(args.contains(&"-vn".to_string()));
+        #[cfg(target_os = "linux")]
         assert!(args.contains(&"pulse".to_string()));
     }
 

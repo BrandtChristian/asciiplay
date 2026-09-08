@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
+#[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -75,7 +76,9 @@ impl Decoder {
 
         // In practice a killed player closes this pipe and ffmpeg dies of EPIPE on its next
         // write, which for a decoder is within a frame. This makes that guarantee rather than a
-        // timing accident, and covers an ffmpeg blocked somewhere other than the pipe.
+        // timing accident, and covers an ffmpeg blocked somewhere other than the pipe. Linux
+        // only, so elsewhere the EPIPE path is all there is.
+        #[cfg(target_os = "linux")]
         unsafe {
             command.pre_exec(|| {
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);

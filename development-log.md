@@ -123,3 +123,31 @@ selection goes from `av01.0.08M` to `avc1.4d4020`.
 on line order, so adding a field later cannot silently shift the parse. yt-dlp writes the literal
 string `NA` for anything the extractor did not fill in, which has to be filtered or a duration of
 `NA` becomes a title.
+
+## 2026-09-08: the same portability bug twice, and the second time the fix was to stop patching it
+
+The first release build failed on all three targets, for two unrelated reasons.
+
+**macOS: `prctl` and `PR_SET_PDEATHSIG` are Linux only.** So is ffmpeg's `pulse` muxer, and its
+`-buffer_duration` option, which AudioToolbox rejects. Both are now behind
+`#[cfg(target_os = ...)]`, with the audio sink chosen per platform. Worth stating plainly: the
+macOS audio path is written but **unverified**, since no Mac was available. It degrades to silent
+video rather than to a crash, because `Audio::start(..).ok()` already treats an audio failure as
+"play the picture anyway". The compile itself is verified without a Mac, via
+`rustup target add aarch64-apple-darwin` and `cargo check --target`, which does not link and so
+catches exactly this class of mistake for the price of a download.
+
+**Linux: the committed `.cargo/config.toml` struck a second time, and the earlier fix was the
+problem.** That fix set `CARGO_TARGET_..._LINKER` to override the config file, and it worked, so
+the entry above declared victory. But the file also sets `rustflags`, and the environment
+variable overrode only the linker. So rustc happily passed `--as-needed` and `--eh-frame-hdr`,
+which are ld flags, to `musl-gcc`, which is a gcc driver and wants them `-Wl,` prefixed.
+
+The real fix is the one the earlier entry described and did not take: **machine settings do not
+belong in a repository.** They moved to `~/.cargo/config.toml`, the repo file is gone, and both
+workflows lost their override blocks entirely. The release job is now one line, `cargo build
+--release --target ${{ matrix.target }}`, with nothing to remember.
+
+**The lesson, sharpened:** when a config leaks somewhere it should not, overriding it at the
+destination is a patch and the leak will find another route. There were two settings in that file
+and the patch covered one. Ask instead where the setting belongs, and put it there.

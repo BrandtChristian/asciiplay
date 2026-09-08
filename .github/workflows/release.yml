@@ -34,14 +34,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      # .cargo/config.toml pins the local machine's rust-lld and zig cc, neither of which exists
-      # on a runner. The target comes from the matrix instead.
       - name: Build
-        env:
-          CARGO_BUILD_TARGET: ${{ matrix.target }}
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: cc
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package
         run: |

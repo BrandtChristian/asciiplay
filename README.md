@@ -62,11 +62,36 @@ then `--mono`.
 cargo build --release
 ```
 
-On SteamOS this needs no C compiler, which is deliberate. See `.cargo/config.toml`: the build
-targets static musl, because rustup ships a self-contained musl libc that `rust-lld` can link
-without gcc. Build scripts still compile for the host, so the host linker is `zig cc`. A static
-binary is also the right artefact on a machine whose root filesystem is replaced by every OS
-update.
+Nothing special is required on an ordinary machine with a C toolchain.
+
+**On a distribution with an immutable root** (SteamOS, and the same applies to any system where
+you cannot install gcc) you can still build with no C compiler at all, but the settings belong in
+`~/.cargo/config.toml` rather than in this repo, because they describe the machine and not the
+code:
+
+```toml
+[build]
+target = "x86_64-unknown-linux-musl"
+
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=ld.lld"]
+
+[target.x86_64-unknown-linux-gnu]
+linker = "zig-cc"
+```
+
+rustup ships a self-contained musl libc that `rust-lld` links with no system C toolchain, which
+also yields a static binary, the right artefact on a machine whose libraries are replaced
+wholesale by every OS update. Build scripts still compile for the host, so the host linker is a
+two line wrapper around `zig cc`, which brings its own libc and compiler-rt.
+
+## Platform support
+
+Linux x86_64 is what this is developed and tested on. macOS builds and is released for both
+architectures, but **its audio path is untested**: ffmpeg's PulseAudio output does not exist
+there, so it uses AudioToolbox instead, and if that is wrong the video plays silently rather than
+failing. Reports welcome.
 
 ## Notes
 

@@ -340,3 +340,64 @@ code {
     animation: none;
   }
 }
+
+/* ---- transport ---- */
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid var(--edge);
+  background: var(--panel);
+  padding: 0.45rem 0.7rem;
+}
+
+.transport-play {
+  min-width: 2.75rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  padding: 0.25rem 0.5rem;
+  color: var(--amber);
+  border-color: var(--amber-faint);
+}
+
+.seek {
+  flex: 1;
+  min-width: 0;
+}
+
+.clock {
+  color: var(--amber-dim);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---- source ---- */
+
+.source .file {
+  color: var(--amber);
+  border-color: var(--amber-faint);
+}
+
+.source .hint {
+  flex-basis: 100%;
+  color: var(--amber-faint);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+/* ---- drop affordance ---- */
+
+.drop-hint {
+  position: absolute;
+  inset: 0.4rem;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--amber);
+  background: rgba(10, 8, 6, 0.72);
+  color: var(--amber);
+  font-size: 0.875rem;
+  letter-spacing: 0.06em;
+  pointer-events: none;
+}

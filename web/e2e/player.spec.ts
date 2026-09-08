@@ -108,3 +108,35 @@ test("copy is refused with an explanation in blocks mode", async ({ page }) => {
   // silently copying an empty string.
   await expect(page.locator(".readout")).toContainText("blocks mode paints pixels");
 });
+
+test("pause actually stops the picture, and play resumes it", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => (await canvasStats(page))?.litFraction ?? 0, { timeout: 15_000 })
+    .toBeGreaterThan(0.01);
+
+  const fingerprint = async () =>
+    page.evaluate(() =>
+      (document.querySelector("canvas") as HTMLCanvasElement).toDataURL().slice(-2000),
+    );
+
+  await page.getByRole("button", { name: "pause" }).click();
+  await page.waitForTimeout(400);
+  const paused = await fingerprint();
+  await page.waitForTimeout(900);
+  expect(await fingerprint(), "the canvas kept changing while paused").toBe(paused);
+
+  await page.getByRole("button", { name: "play" }).click();
+  await page.waitForTimeout(900);
+  expect(await fingerprint(), "play did not resume").not.toBe(paused);
+});
+
+test("the seek bar moves the video", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  await page.locator(".seek").fill("6");
+  await expect(page.locator(".clock")).toContainText("0:06");
+});

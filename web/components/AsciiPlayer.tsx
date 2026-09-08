@@ -81,6 +81,10 @@ export default function AsciiPlayer() {
   const [grid, setGrid] = useState({ columns: 0, rows: 0 });
   const [webmUrl, setWebmUrl] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [playing, setPlaying] = useState(true);
+  const [position, setPosition] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [draggingOver, setDraggingOver] = useState(false);
 
   // The loop reads these through a ref so that changing a control never restarts it, and the
   // ref is written from an effect rather than during render.
@@ -98,6 +102,55 @@ export default function AsciiPlayer() {
     const video = videoRef.current;
     if (video) video.muted = muted;
   }, [muted]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onTime = () => setPosition(video.currentTime);
+    const onLoaded = () => setDuration(Number.isFinite(video.duration) ? video.duration : 0);
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
+    // HAVE_METADATA or better means these events may already have fired, before this effect
+    // had a chance to subscribe, so read the current state as well as listening for changes.
+    if (video.readyState >= 1) onLoaded();
+    setPlaying(!video.paused);
+    video.addEventListener("timeupdate", onTime);
+    video.addEventListener("loadedmetadata", onLoaded);
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    return () => {
+      video.removeEventListener("timeupdate", onTime);
+      video.removeEventListener("loadedmetadata", onLoaded);
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+    };
+  }, []);
+
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) void video.play();
+    else video.pause();
+  }, []);
+
+  const seekTo = useCallback((seconds: number) => {
+    const video = videoRef.current;
+    if (video) video.currentTime = seconds;
+  }, []);
+
+  // Space is the expected key for this, but not while a control has focus, where it belongs to
+  // the button or slider the user is actually operating.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space") return;
+      const active = document.activeElement;
+      if (active instanceof HTMLButtonElement || active instanceof HTMLInputElement) return;
+      event.preventDefault();
+      togglePlay();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [togglePlay]);
 
   useEffect(() => {
     let handle = 0;
@@ -310,16 +363,22 @@ export default function AsciiPlayer() {
       <div
         className="screen"
         ref={shellRef}
-        onDragOver={(event) => event.preventDefault()}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDraggingOver(true);
+        }}
+        onDragLeave={() => setDraggingOver(false)}
         onDrop={(event) => {
           event.preventDefault();
+          setDraggingOver(false);
           const file = event.dataTransfer.files[0];
           if (file?.type.startsWith("video/")) openFile(file);
-          else setNotice("drop a video file");
+          else setNotice("that was not a video file");
         }}
       >
         <canvas ref={displayRef} className="output" />
         <div className="scanlines" aria-hidden="true" />
+        {draggingOver ? <div className="drop-hint">drop to play it here</div> : null}
         <video
           ref={videoRef}
           src={source.src}
@@ -340,6 +399,30 @@ export default function AsciiPlayer() {
         <span className="dim">{source.label}</span>
         {recording ? <span className="recording">recording</span> : null}
         {notice ? <span className="notice">{notice}</span> : null}
+      </div>
+
+      <div className="transport">
+        <button
+          type="button"
+          className="transport-play"
+          onClick={togglePlay}
+          aria-label={playing ? "pause" : "play"}
+        >
+          {playing ? "❚❚" : "▶"}
+        </button>
+        <input
+          type="range"
+          className="seek"
+          min={0}
+          max={duration || 0}
+          step={0.02}
+          value={Math.min(position, duration || 0)}
+          onChange={(event) => seekTo(Number(event.target.value))}
+          aria-label="position"
+        />
+        <span className="clock">
+          {formatClock(position)} / {formatClock(duration)}
+        </span>
       </div>
 
       <div className="controls">
@@ -405,8 +488,8 @@ export default function AsciiPlayer() {
           </button>
         </fieldset>
 
-        <fieldset>
-          <legend>source</legend>
+        <fieldset className="source">
+          <legend>clip</legend>
           {CLIPS.map((clip) => (
             <button
               key={clip.src}
@@ -418,7 +501,7 @@ export default function AsciiPlayer() {
             </button>
           ))}
           <label className="file">
-            open
+            try your own video
             <input
               type="file"
               accept="video/*"
@@ -428,6 +511,7 @@ export default function AsciiPlayer() {
               }}
             />
           </label>
+          <span className="hint">or drop one on the screen. it stays on your machine.</span>
         </fieldset>
 
         <fieldset>
@@ -453,4 +537,10 @@ export default function AsciiPlayer() {
       </div>
     </div>
   );
+}
+
+function formatClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0:00";
+  const whole = Math.floor(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }

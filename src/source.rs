@@ -32,8 +32,6 @@ pub struct MediaSource {
     pub display_width: u32,
     pub display_height: u32,
     pub duration_seconds: Option<f64>,
-    pub label: String,
-    pub seekable: bool,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -133,11 +131,6 @@ pub fn resolve(input: &str) -> Result<MediaSource> {
                 display_width,
                 display_height,
                 duration_seconds: probe.duration_seconds,
-                label: Path::new(input)
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| input.into()),
-                seekable: true,
             })
         }
     }
@@ -200,6 +193,9 @@ mod tests {
 
     #[test]
     fn a_stream_with_no_dimensions_has_no_display_size() {
-        assert_eq!(display_dimensions(&parse_probe_output("duration=5.0")), None);
+        assert_eq!(
+            display_dimensions(&parse_probe_output("duration=5.0")),
+            None
+        );
     }
 }

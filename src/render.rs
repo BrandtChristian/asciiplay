@@ -10,8 +10,7 @@ pub const MINIMUM_CELL_ROWS: u16 = 10;
 // In colour mode the colour carries the picture, so a dense ramp only adds noise: ten levels
 // is enough. In mono the glyph is the only channel there is, so the long ramp earns its keep.
 pub const COLOUR_GLYPH_RAMP: &[u8] = b" .:-=+*#%@";
-pub const MONO_GLYPH_RAMP: &[u8] =
-    b" .`^\":;!~+?][}{)(|\\/tfjrxnuvczYUJCLQ0Zmwqpdbkhao*#MW&8%B@$";
+pub const MONO_GLYPH_RAMP: &[u8] = b" .`^\":;!~+?][}{)(|\\/tfjrxnuvczYUJCLQ0Zmwqpdbkhao*#MW&8%B@$";
 
 // Adjacent cells almost never share an exact RGB triple once a frame has been downscaled,
 // because each cell is an average of order a hundred source pixels. Measured on real footage:
@@ -150,7 +149,7 @@ pub fn luminance(red: u8, green: u8, blue: u8) -> u8 {
 
 fn glyph_for_luminance(luminance: u8, ramp: &[u8]) -> u8 {
     // luminance maxes at 255, so this can never reach ramp.len() and never needs clamping.
-    ramp[luminance as usize * ramp.len() >> LUMA_SHIFT]
+    ramp[(luminance as usize * ramp.len()) >> LUMA_SHIFT]
 }
 
 fn beyond_tolerance(a: [u8; 3], b: [u8; 3], tolerance: u8) -> bool {
@@ -435,7 +434,11 @@ mod tests {
         let mut buffer = Vec::new();
         encode_frame(&mut buffer, &layout, &pixels, RenderMode::Colour, 8).unwrap();
         let text = String::from_utf8(buffer).unwrap();
-        assert_eq!(text.matches("\x1b[38;2;").count(), 3, "one per row, no more");
+        assert_eq!(
+            text.matches("\x1b[38;2;").count(),
+            3,
+            "one per row, no more"
+        );
     }
 
     #[test]
@@ -474,7 +477,10 @@ mod tests {
         let mut buffer = Vec::new();
         encode_frame(&mut buffer, &layout, &pixels, RenderMode::Blocks, 8).unwrap();
         let text = String::from_utf8(buffer).unwrap();
-        assert_eq!(text, "\x1b[1;1H\x1b[38;2;255;0;0m\x1b[48;2;0;0;255m\u{2580}\x1b[0m");
+        assert_eq!(
+            text,
+            "\x1b[1;1H\x1b[38;2;255;0;0m\x1b[48;2;0;0;255m\u{2580}\x1b[0m"
+        );
     }
 
     #[test]
@@ -534,5 +540,87 @@ mod tests {
         let first = buffer.len();
         encode_frame(&mut buffer, &layout, &pixels, RenderMode::Mono, 8).unwrap();
         assert_eq!(buffer.len(), first);
+    }
+}
+
+fn format_clock(seconds: f64) -> String {
+    let total = seconds.max(0.0) as u64;
+    let (hours, minutes, seconds) = (total / 3600, (total % 3600) / 60, total % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
+/// One status line, already truncated to the terminal width.
+pub fn format_status_line(
+    position_seconds: f64,
+    duration_seconds: Option<f64>,
+    measured_fps: f64,
+    dropped_frames: u64,
+    paused: bool,
+    width: u16,
+) -> String {
+    let total = match duration_seconds {
+        Some(total) => format_clock(total),
+        None => "--:--".to_string(),
+    };
+    let mut line = format!(
+        "{} / {}  {measured_fps:.1}fps",
+        format_clock(position_seconds),
+        total
+    );
+    if dropped_frames > 0 {
+        line.push_str(&format!("  {dropped_frames} dropped"));
+    }
+    if paused {
+        line.push_str("  [paused]");
+    }
+    line.push_str("  q quit  space pause  arrows seek");
+    line.chars().take(width as usize).collect()
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn under_an_hour_omits_the_hour_field() {
+        let line = format_status_line(42.0, Some(90.0), 23.7, 0, false, 200);
+        assert!(line.starts_with("0:42 / 1:30  23.7fps"), "got {line}");
+    }
+
+    #[test]
+    fn over_an_hour_shows_it() {
+        assert_eq!(format_clock(3723.0), "1:02:03");
+    }
+
+    #[test]
+    fn an_unknown_duration_shows_dashes() {
+        let line = format_status_line(5.0, None, 24.0, 0, false, 200);
+        assert!(line.contains("0:05 / --:--"), "got {line}");
+    }
+
+    #[test]
+    fn drops_and_pause_are_only_shown_when_they_apply() {
+        let quiet = format_status_line(1.0, Some(2.0), 24.0, 0, false, 200);
+        assert!(!quiet.contains("dropped"));
+        assert!(!quiet.contains("paused"));
+        let noisy = format_status_line(1.0, Some(2.0), 24.0, 7, true, 200);
+        assert!(noisy.contains("7 dropped"));
+        assert!(noisy.contains("[paused]"));
+    }
+
+    #[test]
+    fn the_line_never_outgrows_the_terminal() {
+        for width in [20u16, 40, 80, 200] {
+            let line = format_status_line(3600.0, Some(7200.0), 23.9, 12, true, width);
+            assert!(
+                line.chars().count() <= width as usize,
+                "width {width} produced {} chars",
+                line.chars().count()
+            );
+        }
     }
 }

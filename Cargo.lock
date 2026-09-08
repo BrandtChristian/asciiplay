@@ -65,6 +65,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "libc",
 ]
 
 [[package]]

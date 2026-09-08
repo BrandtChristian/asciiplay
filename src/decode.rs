@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -65,11 +66,24 @@ pub fn video_args(
 
 impl Decoder {
     pub fn spawn(args: &[String], frame_bytes: usize) -> Result<Self> {
-        let mut child = Command::new("ffmpeg")
+        let mut command = Command::new("ffmpeg");
+        command
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // In practice a killed player closes this pipe and ffmpeg dies of EPIPE on its next
+        // write, which for a decoder is within a frame. This makes that guarantee rather than a
+        // timing accident, and covers an ffmpeg blocked somewhere other than the pipe.
+        unsafe {
+            command.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
+
+        let mut child = command
             .spawn()
             .context("could not start ffmpeg (is it on PATH?)")?;
 

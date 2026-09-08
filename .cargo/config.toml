@@ -11,6 +11,9 @@
 # also wants a static libgcc.a, which is a gcc package file we cannot get; zig bundles its
 # own compiler-rt and supplies it. An empty libgcc.a shim was tried first and produced
 # binaries that linked cleanly and then segfaulted, so do not go back to that.
+# Only applied locally. CI runs on a normal glibc box with a real cc, where none of this is
+# needed, so the workflow overrides the target by not using this file at all: it sets
+# nothing, and cargo defaults to the host.
 [build]
 target = "x86_64-unknown-linux-musl"
 

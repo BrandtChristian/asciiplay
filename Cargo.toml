@@ -1,0 +1,15 @@
+[package]
+name = "asciiplay"
+version = "0.1.0"
+edition = "2021"
+description = "Play video as coloured ASCII art in the terminal"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.29"
+
+[profile.release]
+opt-level = 3
+lto = true

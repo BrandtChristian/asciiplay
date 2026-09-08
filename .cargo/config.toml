@@ -1,0 +1,22 @@
+# SteamOS ships no C compiler and cannot be given one: the root filesystem is rebuilt
+# bit-identically by every OS update and pacman is off limits. Two consequences.
+#
+# The build target is static musl, because rustup ships a self-contained musl libc that
+# rust-lld can link with no system C toolchain at all. A static binary is also the right
+# artifact here, since every system library it might otherwise depend on is replaced
+# wholesale on update.
+#
+# Build scripts and proc macros still compile for the host, and those need a C compiler
+# driver, so the host linker is `zig cc` (see ~/.local/bin/zig-cc). Rust's glibc target
+# also wants a static libgcc.a, which is a gcc package file we cannot get; zig bundles its
+# own compiler-rt and supplies it. An empty libgcc.a shim was tried first and produced
+# binaries that linked cleanly and then segfaulted, so do not go back to that.
+[build]
+target = "x86_64-unknown-linux-musl"
+
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=ld.lld"]
+
+[target.x86_64-unknown-linux-gnu]
+linker = "zig-cc"

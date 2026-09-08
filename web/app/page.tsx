@@ -1,8 +1,7 @@
 import AsciiPlayer from "@/components/AsciiPlayer";
 import BootLines from "@/components/BootLines";
 
-const INSTALL_COMMAND =
-  "curl -fsSL https://raw.githubusercontent.com/BrandtChristian/asciiplay/main/install.sh | sh";
+const INSTALL_COMMAND = "curl -fsSL https://asciiplay.vercel.app/install.sh | sh";
 
 export default function Home() {
   return (

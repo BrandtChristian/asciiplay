@@ -48,7 +48,7 @@ plain text and an asciinema `.cast` that replays in a real terminal. The source 
 ## Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/BrandtChristian/asciiplay/main/install.sh | sh
+curl -fsSL https://asciiplay.vercel.app/install.sh | sh
 ```
 
 Fetches a single static binary into `~/.local/bin`, verifies its checksum, then reports on

@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "prebuild": "cp ../install.sh public/install.sh"
   },
   "dependencies": {
     "motion": "^13.2.0",

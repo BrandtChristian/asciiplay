@@ -43,3 +43,6 @@ next-env.d.ts
 # playwright
 /test-results
 /playwright-report
+
+# copied from the repo root by prebuild
+/public/install.sh

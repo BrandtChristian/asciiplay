@@ -13,13 +13,23 @@ import {
   type Layout,
   type RenderMode,
 } from "@/lib/ascii";
+import { MONO_INKS, monoTreatment, rampForInk, type MonoInk } from "@/lib/mono";
 
 const CLIPS = [
   { src: "/clips/big-buck-bunny.mp4", label: "big-buck-bunny.mp4" },
   { src: "/clips/mandelbrot.mp4", label: "mandelbrot.mp4" },
 ] as const;
 
-const MONO_INK = "#ffb454";
+/**
+ * The mode row, flattened. Mono appears three times because the ink is a separate axis from
+ * the mode, and a row of five buttons is a better control than a mode plus a sub-toggle.
+ */
+const MODE_CHOICES: { label: string; mode: RenderMode; ink?: MonoInk }[] = [
+  { label: "colour", mode: "colour" },
+  ...MONO_INKS.map((ink) => ({ label: monoTreatment(ink).label, mode: "mono" as const, ink })),
+  { label: "blocks", mode: "blocks" },
+];
+
 /** Recording accumulates ANSI text, so it needs a ceiling or a long session eats the tab. */
 const CAST_BYTE_LIMIT = 24 * 1024 * 1024;
 
@@ -72,6 +82,7 @@ export default function AsciiPlayer() {
 
   const [source, setSource] = useState<{ src: string; label: string }>(CLIPS[0]);
   const [mode, setMode] = useState<RenderMode>("colour");
+  const [monoInk, setMonoInk] = useState<MonoInk>("amber");
   const [charset, setCharset] = useState<CharsetName>("ascii");
   const [columns, setColumns] = useState(110);
   const [speed, setSpeed] = useState(1);
@@ -88,10 +99,10 @@ export default function AsciiPlayer() {
 
   // The loop reads these through a ref so that changing a control never restarts it, and the
   // ref is written from an effect rather than during render.
-  const settingsRef = useRef({ mode, charset, columns, recording });
+  const settingsRef = useRef({ mode, charset, columns, recording, monoInk });
   useEffect(() => {
-    settingsRef.current = { mode, charset, columns, recording };
-  }, [mode, charset, columns, recording]);
+    settingsRef.current = { mode, charset, columns, recording, monoInk };
+  }, [mode, charset, columns, recording, monoInk]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -165,8 +176,10 @@ export default function AsciiPlayer() {
       // HAVE_CURRENT_DATA: below this there is no frame to sample yet.
       if (video.readyState < 2 || !video.videoWidth) return;
 
-      const { mode, charset, columns, recording } = settingsRef.current;
-      const ramp = CHARSET_PRESETS[charset];
+      const { mode, charset, columns, recording, monoInk } = settingsRef.current;
+      const treatment = monoTreatment(monoInk);
+      const ramp =
+        mode === "mono" ? rampForInk(CHARSET_PRESETS[charset], monoInk) : CHARSET_PRESETS[charset];
 
       if (!sampleRef.current) sampleRef.current = document.createElement("canvas");
       if (!glyphRef.current) glyphRef.current = document.createElement("canvas");
@@ -209,7 +222,7 @@ export default function AsciiPlayer() {
 
       displayContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       displayContext.globalCompositeOperation = "source-over";
-      displayContext.fillStyle = "#000";
+      displayContext.fillStyle = mode === "mono" ? treatment.ground : "#000";
       displayContext.fillRect(0, 0, width, height);
 
       if (mode === "blocks") {
@@ -230,7 +243,7 @@ export default function AsciiPlayer() {
         }
         target.font = `${metrics.fontSize}px ui-monospace, monospace`;
         target.textBaseline = "middle";
-        target.fillStyle = mode === "mono" ? MONO_INK : "#fff";
+        target.fillStyle = mode === "mono" ? treatment.glyph : "#fff";
         for (let row = 0; row < rows.length; row += 1) {
           // One call per row rather than per cell: about 40 draws a frame instead of 4000.
           target.fillText(rows[row], 0, row * metrics.cellHeight + metrics.cellHeight / 2);
@@ -428,14 +441,17 @@ export default function AsciiPlayer() {
       <div className="controls">
         <fieldset>
           <legend>mode</legend>
-          {(["colour", "mono", "blocks"] as RenderMode[]).map((option) => (
+          {MODE_CHOICES.map((choice) => (
             <button
-              key={option}
+              key={choice.label}
               type="button"
-              aria-pressed={mode === option}
-              onClick={() => setMode(option)}
+              aria-pressed={mode === choice.mode && (!choice.ink || monoInk === choice.ink)}
+              onClick={() => {
+                setMode(choice.mode);
+                if (choice.ink) setMonoInk(choice.ink);
+              }}
             >
-              {option}
+              {choice.label}
             </button>
           ))}
         </fieldset>

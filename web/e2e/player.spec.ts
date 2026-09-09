@@ -73,7 +73,7 @@ test("every mode and charset paints something, and no pressed label goes invisib
     .poll(async () => (await canvasStats(page))?.litFraction ?? 0, { timeout: 15_000 })
     .toBeGreaterThan(0.01);
 
-  for (const label of ["mono", "blocks", "colour", "shades", "long", "ascii"]) {
+  for (const label of ["amber", "b&w", "reverse", "blocks", "colour", "shades", "long", "ascii"]) {
     const button = page.getByRole("button", { name: label, exact: true });
     if (await button.isDisabled()) continue;
     await button.click();
@@ -139,4 +139,24 @@ test("the seek bar moves the video", async ({ page }) => {
 
   await page.locator(".seek").fill("6");
   await expect(page.locator(".clock")).toContainText("0:06");
+});
+
+test("the mono treatments invert the paper, not just the ink", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => (await canvasStats(page))?.litFraction ?? 0, { timeout: 15_000 })
+    .toBeGreaterThan(0.01);
+
+  await page.getByRole("button", { name: "amber", exact: true }).click();
+  await page.waitForTimeout(350);
+  const onBlack = await canvasStats(page);
+  // Light glyphs on a dark ground: most of the canvas is unlit, only the glyphs are.
+  expect(onBlack!.litFraction, "amber should sit on a dark ground").toBeLessThan(0.5);
+
+  await page.getByRole("button", { name: "reverse", exact: true }).click();
+  await page.waitForTimeout(350);
+  const onWhite = await canvasStats(page);
+  // Reverse is paper: nearly every pixel is lit, and the glyphs are the dark part. Getting this
+  // wrong by only swapping the glyph colour leaves a dark canvas and looks like a negative.
+  expect(onWhite!.litFraction, "reverse should sit on a light ground").toBeGreaterThan(0.8);
 });

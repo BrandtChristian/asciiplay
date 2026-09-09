@@ -11,7 +11,7 @@ import {
   type Layout,
   type RenderMode,
 } from "@/lib/ascii";
-import { renderRange } from "@/lib/export/frames";
+import { renderRange, type ExportedFrame } from "@/lib/export/frames";
 import { encodeMp4 } from "@/lib/export/mp4";
 import { fpsFor, frameTimestamps, type ExportFormat, type Range } from "@/lib/export/timeline";
 import { MONO_INKS, monoTreatment, type MonoInk } from "@/lib/mono";
@@ -42,6 +42,22 @@ const CAST_BYTE_LIMIT = 24 * 1024 * 1024;
 
 /** Fixed until a later task adds the format toggle; the button label already reads from this. */
 const EXPORT_FORMAT: ExportFormat = "mp4";
+
+/**
+ * Passes frames through unchanged while counting them. renderRange is a generator, so it cannot
+ * both yield frames and hand back how many of the requested timestamps actually produced one; the
+ * caller already knows how many it asked for, so it is simpler for the caller to count what it
+ * received and compare, than for the generator to report on itself.
+ */
+async function* countedFrames(
+  frames: AsyncIterable<ExportedFrame>,
+  received: { count: number },
+): AsyncGenerator<ExportedFrame> {
+  for await (const frame of frames) {
+    received.count += 1;
+    yield frame;
+  }
+}
 
 export default function AsciiPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -326,13 +342,23 @@ export default function AsciiPlayer() {
       { mode, monoInk, charsetRamp: CHARSET_PRESETS[charset], columns, cellWidth },
       new AbortController().signal,
     );
+    const received = { count: 0 };
     try {
-      const blob = await encodeMp4(frames, {
+      const blob = await encodeMp4(countedFrames(frames, received), {
         fps,
         width: layout.cellColumns * cellWidth,
         height: layout.cellRows * cellWidth * 2,
       });
       download(blob, "asciiplay.mp4");
+      // A range only partly overlapping the available video (this clip's lead-in again, but
+      // straddled rather than fully inside it) still produces a clean, playable file, just a
+      // shorter one starting later than marked. That is worth disclosing even though it is not
+      // worth refusing: the marked range itself is a UI concern outside this task's scope.
+      if (received.count < timestamps.length) {
+        setNotice(
+          `exported ${received.count} of ${timestamps.length} frames, the rest of that range has no video`,
+        );
+      }
     } catch (error) {
       // Reachable, not theoretical: any marked range inside this clip's audio-only lead-in has
       // no video sample at all, and renderRange throws for exactly that rather than letting the

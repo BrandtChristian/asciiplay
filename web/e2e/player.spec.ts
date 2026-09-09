@@ -246,3 +246,64 @@ test("exports the marked range as a real MP4", async ({ page }) => {
   // empty blob, which is exactly the failure worth catching.
   expect(bytes.subarray(4, 8).toString("latin1")).toBe("ftyp");
 });
+
+test("a range with no video in it shows a message and downloads nothing", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  let downloaded = false;
+  page.on("download", () => {
+    downloaded = true;
+  });
+
+  await page.getByRole("button", { name: "pause" }).click();
+  // 2 to 3 sits entirely inside the audio-only lead-in (video only starts at 6.625s), so this
+  // must fail loudly rather than hand back a playable file with nothing in it.
+  await seekWhilePaused(page, 2);
+  await page.getByRole("button", { name: "set in", exact: true }).click();
+  await seekWhilePaused(page, 3);
+  await page.getByRole("button", { name: "set out", exact: true }).click();
+
+  await page.getByRole("button", { name: "export mp4", exact: true }).click();
+
+  // The notice clears itself after 4 seconds, so assert on it while it is still there rather
+  // than waiting a fixed period first and reading afterward.
+  await expect(page.locator(".readout"), {
+    message: "no-video notice never appeared",
+  }).toContainText("that range has no video in it", { timeout: 15_000 });
+  expect(downloaded, "a range with nothing in it should not produce a file").toBe(false);
+});
+
+test("a range straddling the video's start still exports, but discloses the shortfall", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  await page.getByRole("button", { name: "pause" }).click();
+  // 5 to 8 straddles the boundary: video only exists from 6.625s, so roughly the first third of
+  // this range has no sample. The export should still succeed with what does exist, not refuse
+  // outright, but say so rather than quietly handing back a shorter clip than was marked.
+  await seekWhilePaused(page, 5);
+  await page.getByRole("button", { name: "set in", exact: true }).click();
+  await seekWhilePaused(page, 8);
+  await page.getByRole("button", { name: "set out", exact: true }).click();
+
+  const download = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    page.getByRole("button", { name: "export mp4", exact: true }).click(),
+  ]).then(([event]) => event);
+
+  const path = await download.path();
+  const bytes = await import("node:fs/promises").then((fs) => fs.readFile(path!));
+  expect(bytes.byteLength).toBeGreaterThan(2000);
+  expect(bytes.subarray(4, 8).toString("latin1")).toBe("ftyp");
+
+  await expect(page.locator(".readout"), {
+    message: "partial-export notice never appeared",
+  }).toContainText("the rest of that range has no video", { timeout: 15_000 });
+});

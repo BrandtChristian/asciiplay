@@ -141,6 +141,39 @@ test("the seek bar moves the video", async ({ page }) => {
   await expect(page.locator(".clock")).toContainText("0:06");
 });
 
+test("in and out markers define a range on the transport", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  // Pause first: otherwise playback keeps advancing position between the seek and the click,
+  // and the marker button reads the wrong instant.
+  await page.getByRole("button", { name: "pause" }).click();
+
+  // Locator.fill() dispatches both "input" and "change" on a range input. While paused, no
+  // timeupdate arrives between the two to sync React's position state, so React's controlled-input
+  // reconciliation reverts the seek and replays it at the stale value. A single native "input"
+  // event, the same event a real drag fires, does not hit that.
+  const seekWhilePaused = (seconds: number) =>
+    page.locator(".seek").evaluate((input: HTMLInputElement, value: number) => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setValue.call(input, String(value));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, seconds);
+
+  await seekWhilePaused(2);
+  await expect(page.locator(".clock")).toContainText("0:02");
+  await page.getByRole("button", { name: "set in", exact: true }).click();
+
+  await seekWhilePaused(7);
+  await expect(page.locator(".clock")).toContainText("0:07");
+  await page.getByRole("button", { name: "set out", exact: true }).click();
+
+  await expect(page.locator(".range-readout")).toContainText("in 0:02");
+  await expect(page.locator(".range-readout")).toContainText("out 0:07");
+});
+
 test("the mono treatments invert the paper, not just the ink", async ({ page }) => {
   await page.goto("/");
   await expect

@@ -11,6 +11,7 @@ import {
   type Layout,
   type RenderMode,
 } from "@/lib/ascii";
+import type { Range } from "@/lib/export/timeline";
 import { MONO_INKS, monoTreatment, type MonoInk } from "@/lib/mono";
 import {
   cellWidthFor,
@@ -74,6 +75,23 @@ export default function AsciiPlayer() {
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
   const [draggingOver, setDraggingOver] = useState(false);
+  const [range, setRange] = useState<Range>({ inSeconds: 0, outSeconds: 0 });
+
+  // An unset out point means "to the end", which is what a freshly loaded clip should offer.
+  const effectiveRange: Range = {
+    inSeconds: range.inSeconds,
+    outSeconds: range.outSeconds > range.inSeconds ? range.outSeconds : duration,
+  };
+
+  // A range from the previous clip should not survive into the next one. Adjusted during
+  // render, following React's own pattern for this, rather than in an effect: setting state
+  // unconditionally from an effect body causes an extra committed render every time source
+  // merely re-renders for unrelated reasons, which react-hooks/set-state-in-effect flags.
+  const [previousSource, setPreviousSource] = useState(source);
+  if (previousSource !== source) {
+    setPreviousSource(source);
+    setRange({ inSeconds: 0, outSeconds: 0 });
+  }
 
   // The loop reads these through a ref so that changing a control never restarts it, and the
   // ref is written from an effect rather than during render.
@@ -360,6 +378,21 @@ export default function AsciiPlayer() {
         <span className="clock">
           {formatClock(position)} / {formatClock(duration)}
         </span>
+      </div>
+
+      <div className="range">
+        <button type="button" onClick={() => setRange((r) => ({ ...r, inSeconds: position }))}>
+          set in
+        </button>
+        <button type="button" onClick={() => setRange((r) => ({ ...r, outSeconds: position }))}>
+          set out
+        </button>
+        <span className="range-readout">
+          in {formatClock(effectiveRange.inSeconds)} out {formatClock(effectiveRange.outSeconds)}
+        </span>
+        <button type="button" onClick={() => setRange({ inSeconds: 0, outSeconds: 0 })}>
+          clear
+        </button>
       </div>
 
       <div className="controls">

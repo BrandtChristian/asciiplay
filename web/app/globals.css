@@ -373,6 +373,19 @@ code {
   white-space: nowrap;
 }
 
+/* ---- range ---- */
+
+.range {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.range-readout {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
 /* ---- source ---- */
 
 .source .file {

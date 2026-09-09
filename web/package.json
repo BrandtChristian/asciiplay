@@ -15,6 +15,7 @@
     "prebuild": "cp ../install.sh public/install.sh"
   },
   "dependencies": {
+    "@mediabunny/aac-encoder": "^1.56.0",
     "gifenc": "^1.0.3",
     "mediabunny": "^1.56.0",
     "motion": "^13.2.0",

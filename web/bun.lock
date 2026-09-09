@@ -5,6 +5,7 @@
     "": {
       "name": "web",
       "dependencies": {
+        "@mediabunny/aac-encoder": "^1.56.0",
         "gifenc": "^1.0.3",
         "mediabunny": "^1.56.0",
         "motion": "^13.2.0",
@@ -162,6 +163,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.6.0", "", {}, "sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
+
+    "@mediabunny/aac-encoder": ["@mediabunny/aac-encoder@1.56.0", "", { "peerDependencies": { "mediabunny": "^1.0.0" } }, "sha512-DY69WcgiCD/cQYLq6vAE/1lVdu4asY32l9WLx7r8b+PDC5qMF9Oe+n0DoqVXNN0TOf3PT4BwAz/Yf3MtHIwCyA=="],
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.2.3", "", { "dependencies": { "@tybys/wasm-util": "^0.10.3" }, "peerDependencies": { "@emnapi/core": "^1.7.1 || ^2.0.0-alpha.4", "@emnapi/runtime": "^1.7.1 || ^2.0.0-alpha.4" } }, "sha512-UMduMbqO5s5zF2NkNacMT/yK5Y5QiKvWr2+50bzIIxFDwVJ2h49b+oyjaCGPhJxd2/gC2x39EHv/gHVuu36x2Q=="],
 

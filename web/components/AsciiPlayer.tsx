@@ -11,7 +11,8 @@ import {
   type Layout,
   type RenderMode,
 } from "@/lib/ascii";
-import { renderRange, type ExportedFrame } from "@/lib/export/frames";
+import { audioAvailability } from "@/lib/export/audio";
+import { renderRange, type ExportedFrame, type FrameSource } from "@/lib/export/frames";
 import { encodeGif } from "@/lib/export/gif";
 import { canEncodeMp4, encodeMp4 } from "@/lib/export/mp4";
 import {
@@ -393,19 +394,32 @@ export default function AsciiPlayer() {
       return;
     }
 
+    const frameSource: FrameSource = { url: source.src, file: source.file };
     const frames = renderRange(
-      { url: source.src, file: source.file },
+      frameSource,
       timestamps,
       { mode, monoInk, charsetRamp: CHARSET_PRESETS[charset], columns, cellWidth },
       new AbortController().signal,
     );
     const received = { count: 0 };
-    const encoderOptions = { fps, width, height };
     try {
-      const blob =
-        format === "mp4"
-          ? await encodeMp4(countedFrames(frames, received), encoderOptions)
-          : await encodeGif(countedFrames(frames, received), encoderOptions);
+      let blob: Blob;
+      if (format === "mp4") {
+        // Mute is a preview control, not an export setting: the export carries audio whenever
+        // the browser can produce it, regardless of whether the live preview is muted.
+        let audio: { source: FrameSource; range: Range } | null = null;
+        try {
+          const availability = await audioAvailability(frameSource, speed);
+          if (availability.kind === "unavailable") setNotice(availability.reason);
+          else audio = { source: frameSource, range: effectiveRange };
+        } catch {
+          // Probing audio is a bonus on top of the video export; a failure here should not
+          // sink an otherwise working export, it should just leave the file silent.
+        }
+        blob = await encodeMp4(countedFrames(frames, received), { fps, width, height, audio });
+      } else {
+        blob = await encodeGif(countedFrames(frames, received), { fps, width, height });
+      }
       download(blob, `asciiplay.${format}`);
       // A range only partly overlapping the available video (this clip's lead-in again, but
       // straddled rather than fully inside it) still produces a clean, playable file, just a

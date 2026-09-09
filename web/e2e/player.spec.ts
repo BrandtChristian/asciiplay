@@ -247,6 +247,110 @@ test("exports the marked range as a real MP4", async ({ page }) => {
   expect(bytes.subarray(4, 8).toString("latin1")).toBe("ftyp");
 });
 
+test("the exported MP4 carries the source's real audio, not a silent track", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  await page.getByRole("button", { name: "pause" }).click();
+  // 8 to 9: same lead-in reasoning as the MP4 export test above. big-buck-bunny.mp4's AAC audio
+  // runs across the whole clip, so this range also has real sound to check for.
+  await seekWhilePaused(page, 8);
+  await page.getByRole("button", { name: "set in", exact: true }).click();
+  await seekWhilePaused(page, 9);
+  await page.getByRole("button", { name: "set out", exact: true }).click();
+
+  const download = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    page.getByRole("button", { name: "export mp4", exact: true }).click(),
+  ]).then(([event]) => event);
+  const path = await download.path();
+
+  const { spawnSync } = await import("node:child_process");
+  const streams = spawnSync("ffprobe", [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-show_entries",
+    "stream=codec_type,codec_name",
+    "-of",
+    "csv=p=0",
+    path!,
+  ])
+    .stdout.toString()
+    .trim();
+  // ffprobe's csv output orders fields by its own struct layout regardless of the
+  // -show_entries argument order, hence "h264,video" rather than "video,h264".
+  expect(streams).toContain("h264,video");
+  expect(streams).toContain("aac,audio");
+
+  // A silent track and a missing one look identical structurally, so decode the audio and read
+  // its level: digital silence reports around -91dB, real audio reports far above the floor.
+  const SILENCE_FLOOR_DB = -90;
+  const volumeReport = spawnSync("ffmpeg", [
+    "-hide_banner",
+    "-i",
+    path!,
+    "-map",
+    "0:a",
+    "-af",
+    "volumedetect",
+    "-f",
+    "null",
+    "-",
+  ]).stderr.toString();
+  const meanVolumeMatch = volumeReport.match(/mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/);
+  expect(meanVolumeMatch, `no mean_volume in ffmpeg output:\n${volumeReport}`).not.toBeNull();
+  expect(Number(meanVolumeMatch![1])).toBeGreaterThan(SILENCE_FLOOR_DB);
+});
+
+test("a speed other than 1x exports video only, and says why", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  await page.getByRole("button", { name: "pause" }).click();
+  await seekWhilePaused(page, 8);
+  await page.getByRole("button", { name: "set in", exact: true }).click();
+  await seekWhilePaused(page, 9);
+  await page.getByRole("button", { name: "set out", exact: true }).click();
+
+  // Locator.fill() has the same controlled-input replay problem on this slider as it does on
+  // the seek bar (see seekWhilePaused above), so drive it the same way: one native "input" event.
+  await page.locator('input[aria-label="speed"]').evaluate((input: HTMLInputElement) => {
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setValue.call(input, "2");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  const download = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    page.getByRole("button", { name: "export mp4", exact: true }).click(),
+  ]).then(([event]) => event);
+  const path = await download.path();
+
+  await expect(page.locator(".readout"), {
+    message: "speed-drops-audio notice never appeared",
+  }).toContainText("audio is dropped when the speed is not 1x", { timeout: 15_000 });
+
+  const { spawnSync } = await import("node:child_process");
+  const streams = spawnSync("ffprobe", [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-show_entries",
+    "stream=codec_type",
+    "-of",
+    "csv=p=0",
+    path!,
+  ])
+    .stdout.toString()
+    .trim();
+  expect(streams.split("\n")).toEqual(["video"]);
+});
+
 test("a range with no video in it shows a message and downloads nothing", async ({ page }) => {
   await page.goto("/");
   await expect

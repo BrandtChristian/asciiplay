@@ -26,6 +26,7 @@ import { MONO_INKS, monoTreatment, type MonoInk } from "@/lib/mono";
 import {
   cellWidthFor,
   createFrameCanvases,
+  pixelSizeFor,
   renderFrame,
   type FrameCanvases,
 } from "@/lib/render-frame";
@@ -84,8 +85,10 @@ export default function AsciiPlayer() {
   const fpsWindowRef = useRef({ frames: 0, since: 0 });
   // Mirrors `grid` state outside React. The rAF loop below is set up once in a [] effect, so
   // reading `grid` state from inside it would always see its initial value; this ref is what
-  // makes the comparison against the latest layout actually work across frames.
-  const gridRef = useRef({ columns: 0, rows: 0 });
+  // makes the comparison against the latest layout actually work across frames. Carries
+  // cellWidth alongside columns/rows so the live size estimate can read pixel dimensions from
+  // state rather than reaching into a ref during render, which react-hooks/refs forbids.
+  const gridRef = useRef({ columns: 0, rows: 0, cellWidth: 0 });
 
   const [source, setSource] = useState<{ src: string; label: string; file?: File }>(CLIPS[0]);
   const [mode, setMode] = useState<RenderMode>("colour");
@@ -96,7 +99,7 @@ export default function AsciiPlayer() {
   const [muted, setMuted] = useState(true);
   const [recording, setRecording] = useState(false);
   const [measuredFps, setMeasuredFps] = useState(0);
-  const [grid, setGrid] = useState({ columns: 0, rows: 0 });
+  const [grid, setGrid] = useState({ columns: 0, rows: 0, cellWidth: 0 });
   const [webmUrl, setWebmUrl] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [playing, setPlaying] = useState(true);
@@ -121,10 +124,13 @@ export default function AsciiPlayer() {
   );
 
   // Live readout of what exporting the marked range would cost, so the ceiling refusal in
-  // exportVideo is never the first time the user hears about the size.
+  // exportVideo is never the first time the user hears about the size. Pixel dimensions, not
+  // cell counts: GIF bytes track output pixel area, and the columns control barely moves that
+  // (see GIF_BYTES_PER_PIXEL's comment in timeline.ts for how a cell-based model got this wrong).
   const exportEstimate = useMemo(() => {
     const frameCount = frameTimestamps({ ...effectiveRange, fps: fpsFor(format), speed }).length;
-    return estimatedBytes(format, frameCount, grid.columns, grid.rows);
+    const { width, height } = pixelSizeFor(grid.columns, grid.rows, grid.cellWidth);
+    return estimatedBytes(format, frameCount, width, height);
   }, [effectiveRange, format, speed, grid]);
 
   // A range from the previous clip should not survive into the next one. Adjusted during
@@ -234,6 +240,10 @@ export default function AsciiPlayer() {
       const { mode, charset, columns, recording, monoInk } = settingsRef.current;
       if (!canvasesRef.current) canvasesRef.current = createFrameCanvases(display);
 
+      // Same value exportVideo recomputes at click time from the same inputs (shell width,
+      // columns), so mirroring it here keeps the live estimate honest without touching a ref
+      // during render.
+      const cellWidth = cellWidthFor(shell.clientWidth, columns);
       const frame = renderFrame(canvasesRef.current, {
         source: video,
         sourceWidth: video.videoWidth,
@@ -242,7 +252,7 @@ export default function AsciiPlayer() {
         monoInk,
         charsetRamp: CHARSET_PRESETS[charset],
         columns,
-        cellWidth: cellWidthFor(shell.clientWidth, columns),
+        cellWidth,
         pixelRatio: window.devicePixelRatio || 1,
       });
       if (!frame) return;
@@ -252,9 +262,14 @@ export default function AsciiPlayer() {
       display.style.height = `${frame.cssHeight}px`;
       if (
         gridRef.current.columns !== frame.layout.cellColumns ||
-        gridRef.current.rows !== frame.layout.cellRows
+        gridRef.current.rows !== frame.layout.cellRows ||
+        gridRef.current.cellWidth !== cellWidth
       ) {
-        gridRef.current = { columns: frame.layout.cellColumns, rows: frame.layout.cellRows };
+        gridRef.current = {
+          columns: frame.layout.cellColumns,
+          rows: frame.layout.cellRows,
+          cellWidth,
+        };
         setGrid(gridRef.current);
       }
 
@@ -368,20 +383,16 @@ export default function AsciiPlayer() {
     if (!layout) return;
     const fps = fpsFor(format);
     const timestamps = frameTimestamps({ ...effectiveRange, fps, speed });
+    const cellWidth = cellWidthFor(shellRef.current!.clientWidth, columns);
+    const { width, height } = pixelSizeFor(layout.cellColumns, layout.cellRows, cellWidth);
 
-    if (
-      exceedsCeiling(
-        format,
-        estimatedBytes(format, timestamps.length, layout.cellColumns, layout.cellRows),
-      )
-    ) {
+    if (exceedsCeiling(format, estimatedBytes(format, timestamps.length, width, height))) {
       setNotice(
         "that range would make a GIF too big to build here. Shorten it or narrow the width",
       );
       return;
     }
 
-    const cellWidth = cellWidthFor(shellRef.current!.clientWidth, columns);
     const frames = renderRange(
       { url: source.src, file: source.file },
       timestamps,
@@ -389,11 +400,7 @@ export default function AsciiPlayer() {
       new AbortController().signal,
     );
     const received = { count: 0 };
-    const encoderOptions = {
-      fps,
-      width: layout.cellColumns * cellWidth,
-      height: layout.cellRows * cellWidth * 2,
-    };
+    const encoderOptions = { fps, width, height };
     try {
       const blob =
         format === "mp4"
@@ -613,7 +620,7 @@ export default function AsciiPlayer() {
           <button type="button" aria-pressed={format === "gif"} onClick={() => setFormat("gif")}>
             gif
           </button>
-          <span className="estimate">~{Math.round(exportEstimate / BYTES_PER_MB)}MB</span>
+          <span className="estimate">{formatEstimate(exportEstimate)}</span>
           {!mp4Supported ? (
             <span className="hint">
               this browser cannot encode H.264, so GIF is the only option here
@@ -653,4 +660,12 @@ function formatClock(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "0:00";
   const whole = Math.floor(seconds);
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+// Rounding a sub-1MB estimate to whole megabytes reads as "~0MB", which tells the user an
+// export is free when it is not. KB below the threshold instead, so a real file never rounds
+// away to nothing.
+function formatEstimate(bytes: number): string {
+  if (bytes < BYTES_PER_MB) return `~${Math.round(bytes / 1024)}KB`;
+  return `~${Math.round(bytes / BYTES_PER_MB)}MB`;
 }

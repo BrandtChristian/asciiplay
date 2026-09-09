@@ -15,6 +15,20 @@ export function cellWidthFor(availableWidth: number, columns: number): number {
   return Math.max(MINIMUM_CELL_WIDTH, Math.floor(availableWidth / columns));
 }
 
+/**
+ * Pixel size of a rendered cell grid. Cell height is always double cell width (the half-block
+ * aspect ratio), the same relationship `renderFrame` below uses for `cssWidth`/`cssHeight`; this
+ * is the export-side equivalent, needed wherever export dimensions are computed without a full
+ * render (the size estimate) as well as where they are (the actual encoders).
+ */
+export function pixelSizeFor(
+  cellColumns: number,
+  cellRows: number,
+  cellWidth: number,
+): { width: number; height: number } {
+  return { width: cellColumns * cellWidth, height: cellRows * cellWidth * 2 };
+}
+
 export interface FrameCanvases {
   display: HTMLCanvasElement;
   glyph: HTMLCanvasElement;

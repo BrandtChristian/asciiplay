@@ -244,35 +244,60 @@ controls be tested at all. Verified this way: quit, Esc, pause and resume, seek 
 directions, seeking past the end ending playback, alternate screen entered and left exactly once,
 cursor restored, and no ffmpeg left behind.
 
-## 2026-09-09: the GIF byte estimate, calibrated against a real export
+## 2026-09-09: the GIF byte estimate, calibrated twice, because the first pass fixed the constant and left the model wrong
 
 `GIF_BYTES_PER_CELL` shipped in Task 4 as an admitted guess of 0.5, with a comment asking for a
 real measurement before anyone trusted it. Task 5 added the GIF encoder itself (gifenc, quantised
 to 256 colours per frame), so there was finally something real to measure it against.
 
-**The export:** big-buck-bunny.mp4, range 8s to 13s (five seconds, chosen because the clip's
-video track only starts at 6.625s, so anything earlier would export nothing), at the default 110
-columns. That range and grid produced 60 frames at 110x31 cells, GIF_FPS being 12.
+**First pass, and why it looked right.** The model was `frameCount * cellColumns * cellRows *
+BYTES_PER_CELL`, bytes per grid cell. Measured against one export, big-buck-bunny.mp4 from 8s to
+13s at the default 110 columns (60 frames at 110x31 cells): the file was 8,050,633 bytes, which
+is 39.35 bytes per cell rather than 0.5. The constant was corrected to 40 and every gate,
+including a ceiling test, passed. It looked calibrated because it was measured against a real
+export, but it was calibrated at exactly one column count, and a per-cell model has no way to be
+wrong at the one point it was fit to.
 
-**Before:** at the old constant of 0.5 bytes per cell, `estimatedBytes("gif", 60, 110, 31)`
-predicted 102,300 bytes, which the readout rounds to "~0MB".
+**Second pass, at a second column count, is where it fell apart.** Measuring 60 columns instead of
+110 gave 1,140x646 pixels at 12 frames, actual size 1,310,981 bytes. The per-cell model, corrected
+constant and all, predicted a small fraction of that and rounded to "~0MB" in the readout, an
+estimate telling the user an export is free when it is 1.25MB. The reason: `cellWidth =
+floor(shellWidth / columns)`, so the exported width is `cellColumns * cellWidth`, which lands back
+near the player's own width whatever `columns` is. Fewer columns does not shrink the output, it
+makes each cell chunkier (1,140x646 at 60 columns is actually slightly *larger* than 1,100x620 at
+110). GIF bytes are driven by pixel area, which barely moves with `columns`, not by cell count,
+which moves a lot. Calibrating one point of a model that is wrong along an axis you never varied
+makes that model look right exactly where you measured it, and nowhere else. That is the sharper
+version of this entry's title, and the actual lesson.
 
-**Actual:** the downloaded file was 8,050,633 bytes, seventy-nine times the estimate. Divided
-back out, that is 39.35 bytes per cell, not 0.5. The 0.5 guess was never in the right order of
-magnitude: ASCII rendered as filled glyph cells and then quantised to 256 colours does not
-compress the way the guess assumed, and gifenc's LZW pass is not finding the large flat runs that
-made 0.5 sound plausible on paper.
+**The fix:** `estimatedBytes`'s GIF branch is now `frameCount * width * height *
+GIF_BYTES_PER_PIXEL`, taking the export's pixel width and height (which the callers already
+compute) rather than the cell grid. Three real exports of big-buck-bunny.mp4, all a 1 second range
+except where noted:
 
-**Chosen constant: 40.** Rounded up from the measured 39.35 rather than down, because this number
-only exists to feed `exceedsCeiling`'s refusal. Overestimating means a request that would have
-just barely fit gets refused instead, which is a minor annoyance. Underestimating means a request
-that will not fit sails past the refusal and the browser is left building an oversized GIF it
-should never have started, which is the actual failure the ceiling exists to prevent. At 40, the
-estimate for this same export is 8,184,000 bytes, 1.7% over the real 8,050,633, comfortably inside
-the "roughly 30%" target.
+- 1,100x620 (110 columns), 12 frames, 1,752,921 bytes: 0.2142 bytes/pixel
+- 1,140x646 (60 columns), 12 frames, 1,310,981 bytes: 0.1483 bytes/pixel
+- 1,100x620 (110 columns), 60 frames (8s to 13s range), 8,050,633 bytes: 0.1967 bytes/pixel
 
-`timeline.test.ts`'s ceiling tests needed no widening: the "under the ceiling" case
-(`estimatedBytes("gif", 12, 80, 24)`) stays at under a megabyte either way, and the "over the
-ceiling" case (`estimatedBytes("gif", 12 * 600, 220, 80)`) was already tens of megabytes over
-25MB at the old constant of 0.5, so raising the constant to 40 only pushed it further over, not
-back under.
+**Chosen constant: 0.21 bytes per pixel**, the top of that range rather than the mean, for the
+same reason as the first pass's rounding: this number feeds `exceedsCeiling`'s refusal, and
+overestimating means an occasional borderline GIF gets refused when it would have fit, while
+underestimating means a GIF that will not fit sails past the refusal and a tab is left building
+one that wedges it. Checked back against reality by exporting a 1 second range at both column
+counts and reading the live estimate before each export: 110 columns showed "~2MB" against an
+actual 1,752,921 bytes (about 20% over), 60 columns showed "~2MB" against an actual 1,310,981
+bytes (about 42% over). Both real files, neither rounded away to "~0MB".
+
+**The estimate display also stopped lying about small files.** Rounding a sub-1MB estimate to
+whole megabytes is how a 1.25MB file became "~0MB" above; the readout now shows kilobytes below
+the 1MB threshold instead of rounding a real file down to nothing.
+
+**Guarded against regressing silently.** `timeline.test.ts` now pins `estimatedBytes` against all
+three measured points above, asserting each prediction lands within 45% of the real size (the
+60-column point runs 42% over by design, since the constant is calibrated to the top of the
+range rather than the mean, so a strict 40% band would fail on that one point specifically). This
+is the test that would have caught the per-cell model in the first place, since 0.5 bytes per
+cell missed these same three points by 13x to 79x, nowhere near even a loose band. The existing
+ceiling test needed its inputs changed for the new pixel-based signature, not its assertions
+weakened: it now checks 12 frames versus 200 frames at the real 1,100x620 resolution rather than
+arbitrary cell counts.

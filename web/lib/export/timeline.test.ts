@@ -45,18 +45,53 @@ describe("fpsFor", () => {
 });
 
 describe("estimatedBytes", () => {
-  it("grows with the frame count and with the cell grid", () => {
-    const small = estimatedBytes("gif", 12, 80, 24);
-    expect(estimatedBytes("gif", 24, 80, 24)).toBeGreaterThan(small);
-    expect(estimatedBytes("gif", 12, 160, 48)).toBeGreaterThan(small);
+  // estimatedBytes takes output pixel dimensions, not cell counts: GIF bytes track pixel area,
+  // and the columns control barely moves that (see GIF_BYTES_PER_PIXEL's comment in timeline.ts
+  // for the per-cell model that got this wrong the first time).
+  it("grows with the frame count and with the pixel area", () => {
+    const small = estimatedBytes("gif", 12, 800, 240);
+    expect(estimatedBytes("gif", 24, 800, 240)).toBeGreaterThan(small);
+    expect(estimatedBytes("gif", 12, 1600, 480)).toBeGreaterThan(small);
   });
 
-  it("puts a long wide GIF over the ceiling and a short one under it", () => {
-    expect(exceedsCeiling("gif", estimatedBytes("gif", 12, 80, 24))).toBe(false);
-    expect(exceedsCeiling("gif", estimatedBytes("gif", 12 * 600, 220, 80))).toBe(true);
+  it("puts a long GIF over the ceiling and a short one under it", () => {
+    // 1100x620 is a real measured export size (110 columns), reused rather than an arbitrary
+    // resolution: see the calibration pin test below for where it came from.
+    expect(exceedsCeiling("gif", estimatedBytes("gif", 12, 1100, 620))).toBe(false);
+    expect(exceedsCeiling("gif", estimatedBytes("gif", 200, 1100, 620))).toBe(true);
   });
 
   it("does not cap MP4, which is small enough to leave alone", () => {
     expect(exceedsCeiling("mp4", GIF_MAX_BYTES * 10)).toBe(false);
+  });
+
+  describe("calibration", () => {
+    // Real GIF exports of big-buck-bunny.mp4, measured 2026-09-09 (development-log.md has the
+    // full story, including the per-cell model this replaced, which was off by up to 79x). This
+    // pins the pixel-area model against the exact three points it was calibrated from, so a
+    // future constant tweak cannot silently walk the estimate away from reality the way the
+    // first model did without anyone noticing until a second column count was tried.
+    const measuredExports = [
+      { columns: 110, width: 1100, height: 620, frameCount: 12, actualBytes: 1_752_921 },
+      { columns: 60, width: 1140, height: 646, frameCount: 12, actualBytes: 1_310_981 },
+      { columns: 110, width: 1100, height: 620, frameCount: 60, actualBytes: 8_050_633 },
+    ];
+
+    // The constant is calibrated to the top of the measured per-pixel range on purpose (see its
+    // comment in timeline.ts), so it overestimates most at the point with the lowest true rate,
+    // the 60-column case, which lands at 42% over rather than inside a stricter 40% band. A
+    // uniform 45% tolerance covers all three real points without loosening enough to let a
+    // badly wrong model through: the old per-cell model missed these by 13x to 79x, nowhere
+    // close to this band either way.
+    const TOLERANCE = 0.45;
+
+    it.each(measuredExports)(
+      "predicts $columns columns ($width x $height, $frameCount frames) within 45% of the measured size",
+      ({ width, height, frameCount, actualBytes }) => {
+        const estimate = estimatedBytes("gif", frameCount, width, height);
+        expect(estimate).toBeGreaterThan(actualBytes * (1 - TOLERANCE));
+        expect(estimate).toBeLessThan(actualBytes * (1 + TOLERANCE));
+      },
+    );
   });
 });

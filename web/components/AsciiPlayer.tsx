@@ -3,17 +3,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   buildCastFile,
-  buildGlyphRows,
   CHARSET_PRESETS,
   encodeAnsi,
-  fitLayout,
   toPlainText,
   type CastFrame,
   type CharsetName,
   type Layout,
   type RenderMode,
 } from "@/lib/ascii";
-import { MONO_INKS, monoTreatment, rampForInk, type MonoInk } from "@/lib/mono";
+import { MONO_INKS, monoTreatment, type MonoInk } from "@/lib/mono";
+import {
+  cellWidthFor,
+  createFrameCanvases,
+  renderFrame,
+  type FrameCanvases,
+} from "@/lib/render-frame";
 
 const CLIPS = [
   { src: "/clips/big-buck-bunny.mp4", label: "big-buck-bunny.mp4" },
@@ -33,43 +37,13 @@ const MODE_CHOICES: { label: string; mode: RenderMode; ink?: MonoInk }[] = [
 /** Recording accumulates ANSI text, so it needs a ceiling or a long session eats the tab. */
 const CAST_BYTE_LIMIT = 24 * 1024 * 1024;
 
-interface Metrics {
-  cellWidth: number;
-  cellHeight: number;
-  fontSize: number;
-}
-
-/**
- * Pick a cell size that fills the available width at the requested column count.
- *
- * The glyph advance has to equal the cell width exactly, or a row drawn with one fillText
- * drifts out of step with the colour grid it is being multiplied against. So the cell width is
- * chosen first, as a whole number of pixels, and the font size is derived from the font's own
- * measured advance ratio.
- */
-function measureMetrics(
-  context: CanvasRenderingContext2D,
-  availableWidth: number,
-  columns: number,
-): Metrics {
-  const cellWidth = Math.max(3, Math.floor(availableWidth / columns));
-  context.font = "100px ui-monospace, monospace";
-  const advanceRatio = context.measureText("M").width / 100;
-  return {
-    cellWidth,
-    cellHeight: cellWidth * 2,
-    fontSize: cellWidth / advanceRatio,
-  };
-}
-
 export default function AsciiPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const displayRef = useRef<HTMLCanvasElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
 
   // Offscreen scratch, created once and resized in place rather than reallocated per frame.
-  const sampleRef = useRef<HTMLCanvasElement | null>(null);
-  const glyphRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasesRef = useRef<FrameCanvases | null>(null);
 
   const layoutRef = useRef<Layout | null>(null);
   const rowsRef = useRef<string[]>([]);
@@ -79,6 +53,10 @@ export default function AsciiPlayer() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const webmChunksRef = useRef<Blob[]>([]);
   const fpsWindowRef = useRef({ frames: 0, since: 0 });
+  // Mirrors `grid` state outside React. The rAF loop below is set up once in a [] effect, so
+  // reading `grid` state from inside it would always see its initial value; this ref is what
+  // makes the comparison against the latest layout actually work across frames.
+  const gridRef = useRef({ columns: 0, rows: 0 });
 
   const [source, setSource] = useState<{ src: string; label: string }>(CLIPS[0]);
   const [mode, setMode] = useState<RenderMode>("colour");
@@ -177,91 +155,34 @@ export default function AsciiPlayer() {
       if (video.readyState < 2 || !video.videoWidth) return;
 
       const { mode, charset, columns, recording, monoInk } = settingsRef.current;
-      const treatment = monoTreatment(monoInk);
-      const ramp =
-        mode === "mono" ? rampForInk(CHARSET_PRESETS[charset], monoInk) : CHARSET_PRESETS[charset];
+      if (!canvasesRef.current) canvasesRef.current = createFrameCanvases(display);
 
-      if (!sampleRef.current) sampleRef.current = document.createElement("canvas");
-      if (!glyphRef.current) glyphRef.current = document.createElement("canvas");
-      const sample = sampleRef.current;
-      const glyph = glyphRef.current;
-
-      const displayContext = display.getContext("2d");
-      const sampleContext = sample.getContext("2d", {
-        willReadFrequently: true,
+      const frame = renderFrame(canvasesRef.current, {
+        source: video,
+        sourceWidth: video.videoWidth,
+        sourceHeight: video.videoHeight,
+        mode,
+        monoInk,
+        charsetRamp: CHARSET_PRESETS[charset],
+        columns,
+        cellWidth: cellWidthFor(shell.clientWidth, columns),
+        pixelRatio: window.devicePixelRatio || 1,
       });
-      const glyphContext = glyph.getContext("2d");
-      if (!displayContext || !sampleContext || !glyphContext) return;
-
-      const available = shell.clientWidth;
-      const metrics = measureMetrics(displayContext, available, columns);
-      const layout = fitLayout(columns, video.videoWidth, video.videoHeight, mode);
-      layoutRef.current = layout;
-
-      const pixelRatio = window.devicePixelRatio || 1;
-      const width = layout.cellColumns * metrics.cellWidth;
-      const height = layout.cellRows * metrics.cellHeight;
-
-      if (display.width !== width * pixelRatio || display.height !== height * pixelRatio) {
-        for (const canvas of [display, glyph]) {
-          canvas.width = width * pixelRatio;
-          canvas.height = height * pixelRatio;
-        }
-        display.style.width = `${width}px`;
-        display.style.height = `${height}px`;
-        setGrid({ columns: layout.cellColumns, rows: layout.cellRows });
-      }
-      if (sample.width !== layout.pixelWidth || sample.height !== layout.pixelHeight) {
-        sample.width = layout.pixelWidth;
-        sample.height = layout.pixelHeight;
-      }
-
-      // One cell per pixel: the browser's own scaler does the downscaling for free.
-      sampleContext.drawImage(video, 0, 0, layout.pixelWidth, layout.pixelHeight);
-      const pixels = sampleContext.getImageData(0, 0, layout.pixelWidth, layout.pixelHeight).data;
-
-      displayContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-      displayContext.globalCompositeOperation = "source-over";
-      displayContext.fillStyle = mode === "mono" ? treatment.ground : "#000";
-      displayContext.fillRect(0, 0, width, height);
-
-      if (mode === "blocks") {
-        // Half blocks are just the cell grid at double vertical resolution, so nearest neighbour
-        // upscaling of the sample IS the mode. No glyphs involved.
-        displayContext.imageSmoothingEnabled = false;
-        displayContext.drawImage(sample, 0, 0, width, height);
-        rowsRef.current = [];
-      } else {
-        const rows = buildGlyphRows(pixels, layout, mode, ramp);
-        rowsRef.current = rows;
-
-        const target = mode === "mono" ? displayContext : glyphContext;
-        if (mode !== "mono") {
-          glyphContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-          glyphContext.fillStyle = "#000";
-          glyphContext.fillRect(0, 0, width, height);
-        }
-        target.font = `${metrics.fontSize}px ui-monospace, monospace`;
-        target.textBaseline = "middle";
-        target.fillStyle = mode === "mono" ? treatment.glyph : "#fff";
-        for (let row = 0; row < rows.length; row += 1) {
-          // One call per row rather than per cell: about 40 draws a frame instead of 4000.
-          target.fillText(rows[row], 0, row * metrics.cellHeight + metrics.cellHeight / 2);
-        }
-
-        if (mode !== "mono") {
-          // White glyphs times the per-cell colour field gives glyph shaped colour, and needs
-          // one composite rather than a fillStyle change per run.
-          displayContext.drawImage(glyph, 0, 0, width, height);
-          displayContext.globalCompositeOperation = "multiply";
-          displayContext.imageSmoothingEnabled = false;
-          displayContext.drawImage(sample, 0, 0, width, height);
-          displayContext.globalCompositeOperation = "source-over";
-        }
+      if (!frame) return;
+      layoutRef.current = frame.layout;
+      rowsRef.current = frame.rows;
+      display.style.width = `${frame.cssWidth}px`;
+      display.style.height = `${frame.cssHeight}px`;
+      if (
+        gridRef.current.columns !== frame.layout.cellColumns ||
+        gridRef.current.rows !== frame.layout.cellRows
+      ) {
+        gridRef.current = { columns: frame.layout.cellColumns, rows: frame.layout.cellRows };
+        setGrid(gridRef.current);
       }
 
       if (recording && castBytesRef.current < CAST_BYTE_LIMIT) {
-        const data = encodeAnsi(pixels, layout, mode, ramp);
+        const data = encodeAnsi(frame.pixels, frame.layout, mode, frame.ramp);
         castBytesRef.current += data.length;
         castRef.current.push({
           time: (timestamp - recordStartRef.current) / 1000,

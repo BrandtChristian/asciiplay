@@ -29,6 +29,23 @@ async function canvasStats(page: import("@playwright/test").Page) {
   });
 }
 
+// A hash of the whole frame, used to tell whether the canvas changed between two moments.
+// Must cover the whole canvas, not a slice of canvas.toDataURL(): the tail of that data URL is
+// only the bottom rows of the PNG, and a frame whose lower region happens to be static hashes
+// the same as the previous one, making two genuinely different frames compare equal.
+async function fingerprint(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector("canvas") as HTMLCanvasElement;
+    const context = canvas.getContext("2d")!;
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    let hash = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      hash = (hash * 31 + data[index] + data[index + 1] * 7 + data[index + 2] * 13) | 0;
+    }
+    return hash;
+  });
+}
+
 test("arrives playing, with a canvas painted from the video", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("canvas")).toBeVisible();
@@ -54,15 +71,8 @@ test("the picture changes over time, so it is playing and not one stuck frame", 
     .poll(async () => (await canvasStats(page))?.litFraction ?? 0, { timeout: 15_000 })
     .toBeGreaterThan(0.01);
 
-  const fingerprint = async () =>
-    page.evaluate(() => {
-      const canvas = document.querySelector("canvas") as HTMLCanvasElement;
-      return canvas.toDataURL().slice(-2000);
-    });
-
-  const before = await fingerprint();
-  await page.waitForTimeout(1200);
-  expect(await fingerprint()).not.toBe(before);
+  const before = await fingerprint(page);
+  await expect.poll(() => fingerprint(page), { timeout: 10_000 }).not.toBe(before);
 });
 
 test("every mode and charset paints something, and no pressed label goes invisible", async ({
@@ -115,32 +125,17 @@ test("pause actually stops the picture, and play resumes it", async ({ page }) =
     .poll(async () => (await canvasStats(page))?.litFraction ?? 0, { timeout: 15_000 })
     .toBeGreaterThan(0.01);
 
-  // Must hash the whole frame, not a slice of the data URL: toDataURL().slice(-2000) only
-  // covers the bottom rows of the PNG, and a frame whose lower region happens to be static
-  // produces the same fingerprint as the previous one, making a real resume look frozen.
-  const fingerprint = async () =>
-    page.evaluate(() => {
-      const canvas = document.querySelector("canvas") as HTMLCanvasElement;
-      const context = canvas.getContext("2d")!;
-      const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
-      let hash = 0;
-      for (let index = 0; index < data.length; index += 4) {
-        hash = (hash * 31 + data[index] + data[index + 1] * 7 + data[index + 2] * 13) | 0;
-      }
-      return hash;
-    });
-
   await page.getByRole("button", { name: "pause" }).click();
   await page.waitForTimeout(400);
-  const paused = await fingerprint();
+  const paused = await fingerprint(page);
   // Fixed wait is correct here: proving the canvas does NOT change means waiting a set period
   // and then checking, not polling until something happens.
   await page.waitForTimeout(900);
-  expect(await fingerprint(), "the canvas kept changing while paused").toBe(paused);
+  expect(await fingerprint(page), "the canvas kept changing while paused").toBe(paused);
 
   await page.getByRole("button", { name: "play" }).click();
   await expect
-    .poll(fingerprint, { timeout: 10_000, message: "play did not resume" })
+    .poll(() => fingerprint(page), { timeout: 10_000, message: "play did not resume" })
     .not.toBe(paused);
 });
 

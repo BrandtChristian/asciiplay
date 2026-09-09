@@ -326,12 +326,19 @@ export default function AsciiPlayer() {
       { mode, monoInk, charsetRamp: CHARSET_PRESETS[charset], columns, cellWidth },
       new AbortController().signal,
     );
-    const blob = await encodeMp4(frames, {
-      fps,
-      width: layout.cellColumns * cellWidth,
-      height: layout.cellRows * cellWidth * 2,
-    });
-    download(blob, "asciiplay.mp4");
+    try {
+      const blob = await encodeMp4(frames, {
+        fps,
+        width: layout.cellColumns * cellWidth,
+        height: layout.cellRows * cellWidth * 2,
+      });
+      download(blob, "asciiplay.mp4");
+    } catch (error) {
+      // Reachable, not theoretical: any marked range inside this clip's audio-only lead-in has
+      // no video sample at all, and renderRange throws for exactly that rather than letting the
+      // encoder hand back a silently empty file.
+      setNotice(error instanceof Error ? error.message : "export failed");
+    }
   }, [charset, columns, download, effectiveRange, mode, monoInk, source, speed]);
 
   useEffect(() => {

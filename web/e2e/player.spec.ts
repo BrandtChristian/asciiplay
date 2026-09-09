@@ -226,9 +226,12 @@ test("exports the marked range as a real MP4", async ({ page }) => {
     .not.toBe("0:00 / 0:00");
 
   await page.getByRole("button", { name: "pause" }).click();
-  await seekWhilePaused(page, 2);
+  // 8 to 9, not 2 to 3: big-buck-bunny.mp4's video track only starts at 6.625s (its first ~6.6s
+  // is an audio-only lead-in), so a range inside that lead-in would export correctly as "no
+  // video in it" and this test would not exercise the real decode path at all.
+  await seekWhilePaused(page, 8);
   await page.getByRole("button", { name: "set in", exact: true }).click();
-  await seekWhilePaused(page, 3);
+  await seekWhilePaused(page, 9);
   await page.getByRole("button", { name: "set out", exact: true }).click();
 
   const download = await Promise.all([

@@ -52,22 +52,25 @@ export async function* renderRange(
     const track = await input.getPrimaryVideoTrack();
     if (!track) throw new Error("that file has no video track");
 
-    // The player's clock is zero based, since browsers normalise <video>.currentTime that way
-    // regardless of the container. mediabunny instead works in the track's own timestamp space,
-    // and a track's first packet is not always at zero (an edit list, or B-frames with an
-    // initial offset: big-buck-bunny.mp4 itself starts its video stream at 6.625s). Requesting
-    // samples without this offset silently matches nothing and yields an empty video.
-    const offset = await track.getFirstTimestamp();
-    const trackTimestamps = timestamps.map((seconds) => seconds + offset);
-
     // Export owns its canvases rather than borrowing the preview's, so a running export cannot
     // fight the live loop over canvas dimensions.
     const canvases = createFrameCanvases(document.createElement("canvas"));
     const sink = new VideoSampleSink(track);
 
-    for await (const sample of sink.samplesAtTimestamps(trackTimestamps)) {
+    // Player time and track time are the same timeline: `<video>.currentTime` is not
+    // renormalised per track, so no offset belongs here. A track's own first packet is not
+    // necessarily at zero, though: this player's own bundled big-buck-bunny.mp4 has its AAC
+    // audio starting at 0 but its video only from 6.625s to 18s, so the first ~6.6s of player
+    // time is a real audio-only lead-in with no video sample at all. (An earlier version of this
+    // function added track.getFirstTimestamp() as an offset, on the wrong assumption that a
+    // nonzero track start meant the player's clock had been renormalised around it. That shifted
+    // every export 6.625s late and, past the track's end, overshot and clamped to the last
+    // frame. Measured against captured reference frames, not just inferred.)
+    let matched = 0;
+    for await (const sample of sink.samplesAtTimestamps(timestamps)) {
       if (signal.aborted) return;
       if (!sample) continue;
+      matched += 1;
       const frame = renderFrame(canvases, {
         source: sample.toCanvasImageSource(),
         sourceWidth: sample.displayWidth,
@@ -84,6 +87,10 @@ export async function* renderRange(
       if (!frame) throw new Error("could not get a canvas context for export");
       yield { canvas: canvases.display, layout: frame.layout };
     }
+    // A range entirely inside a video-less lead-in (or otherwise outside the track) matches
+    // nothing. Encoding that would silently hand back a valid but empty MP4, so the caller needs
+    // a real error to show instead.
+    if (matched === 0) throw new Error("that range has no video in it");
   } finally {
     input.dispose();
   }

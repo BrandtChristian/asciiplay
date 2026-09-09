@@ -46,6 +46,22 @@ async function fingerprint(page: import("@playwright/test").Page) {
   });
 }
 
+// Locator.fill() dispatches "input" then "change" synchronously on a range input. The
+// "input" seeks to the target value, but React's controlled-input re-render reverts the
+// input's DOM value before "change" fires, so "change" replays the onChange handler against
+// that reverted, stale value and the seek lands the video back near zero. A single native
+// "input" event, which is what a real drag fires, only triggers the first half of that and
+// avoids the replay. A paused seek does fire timeupdate and does reach React state, so this is
+// a quirk of fill() on a controlled range input, not an app bug: seekTo deliberately does not
+// also call setPosition. Requires the video to already be paused.
+function seekWhilePaused(page: import("@playwright/test").Page, seconds: number) {
+  return page.locator(".seek").evaluate((input: HTMLInputElement, value: number) => {
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setValue.call(input, String(value));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }, seconds);
+}
+
 test("arrives playing, with a canvas painted from the video", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("canvas")).toBeVisible();
@@ -159,26 +175,11 @@ test("in and out markers define a range on the transport", async ({ page }) => {
   // and the marker button reads the wrong instant.
   await page.getByRole("button", { name: "pause" }).click();
 
-  // Locator.fill() dispatches "input" then "change" synchronously on a range input. The
-  // "input" seeks to the target value, but React's controlled-input re-render reverts the
-  // input's DOM value before "change" fires, so "change" replays the onChange handler against
-  // that reverted, stale value and the seek lands the video back near zero. A single native
-  // "input" event, which is what a real drag fires, only triggers the first half of that and
-  // avoids the replay. A paused seek does fire timeupdate and does reach React state, so this is
-  // a quirk of fill() on a controlled range input, not an app bug: seekTo deliberately does not
-  // also call setPosition.
-  const seekWhilePaused = (seconds: number) =>
-    page.locator(".seek").evaluate((input: HTMLInputElement, value: number) => {
-      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-      setValue.call(input, String(value));
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    }, seconds);
-
-  await seekWhilePaused(2);
+  await seekWhilePaused(page, 2);
   await expect(page.locator(".clock")).toContainText("0:02");
   await page.getByRole("button", { name: "set in", exact: true }).click();
 
-  await seekWhilePaused(7);
+  await seekWhilePaused(page, 7);
   await expect(page.locator(".clock")).toContainText("0:07");
   await page.getByRole("button", { name: "set out", exact: true }).click();
 
@@ -216,4 +217,29 @@ test("reverse mode drops the CRT scanlines, which only work on a dark screen", a
 
   await page.getByRole("button", { name: "amber", exact: true }).click();
   await expect(page.locator(".scanlines")).toBeVisible();
+});
+
+test("exports the marked range as a real MP4", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  await page.getByRole("button", { name: "pause" }).click();
+  await seekWhilePaused(page, 2);
+  await page.getByRole("button", { name: "set in", exact: true }).click();
+  await seekWhilePaused(page, 3);
+  await page.getByRole("button", { name: "set out", exact: true }).click();
+
+  const download = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    page.getByRole("button", { name: "export mp4", exact: true }).click(),
+  ]).then(([event]) => event);
+
+  const path = await download.path();
+  const bytes = await import("node:fs/promises").then((fs) => fs.readFile(path!));
+  expect(bytes.byteLength).toBeGreaterThan(2000);
+  // An MP4 carries "ftyp" at offset 4. Asserting a file merely appeared would pass on an
+  // empty blob, which is exactly the failure worth catching.
+  expect(bytes.subarray(4, 8).toString("latin1")).toBe("ftyp");
 });

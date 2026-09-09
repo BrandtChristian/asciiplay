@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildCastFile,
   CHARSET_PRESETS,
@@ -11,7 +11,9 @@ import {
   type Layout,
   type RenderMode,
 } from "@/lib/ascii";
-import type { Range } from "@/lib/export/timeline";
+import { renderRange } from "@/lib/export/frames";
+import { encodeMp4 } from "@/lib/export/mp4";
+import { fpsFor, frameTimestamps, type ExportFormat, type Range } from "@/lib/export/timeline";
 import { MONO_INKS, monoTreatment, type MonoInk } from "@/lib/mono";
 import {
   cellWidthFor,
@@ -38,6 +40,9 @@ const MODE_CHOICES: { label: string; mode: RenderMode; ink?: MonoInk }[] = [
 /** Recording accumulates ANSI text, so it needs a ceiling or a long session eats the tab. */
 const CAST_BYTE_LIMIT = 24 * 1024 * 1024;
 
+/** Fixed until a later task adds the format toggle; the button label already reads from this. */
+const EXPORT_FORMAT: ExportFormat = "mp4";
+
 export default function AsciiPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const displayRef = useRef<HTMLCanvasElement>(null);
@@ -59,7 +64,7 @@ export default function AsciiPlayer() {
   // makes the comparison against the latest layout actually work across frames.
   const gridRef = useRef({ columns: 0, rows: 0 });
 
-  const [source, setSource] = useState<{ src: string; label: string }>(CLIPS[0]);
+  const [source, setSource] = useState<{ src: string; label: string; file?: File }>(CLIPS[0]);
   const [mode, setMode] = useState<RenderMode>("colour");
   const [monoInk, setMonoInk] = useState<MonoInk>("amber");
   const [charset, setCharset] = useState<CharsetName>("ascii");
@@ -78,10 +83,15 @@ export default function AsciiPlayer() {
   const [range, setRange] = useState<Range>({ inSeconds: 0, outSeconds: 0 });
 
   // An unset out point means "to the end", which is what a freshly loaded clip should offer.
-  const effectiveRange: Range = {
-    inSeconds: range.inSeconds,
-    outSeconds: range.outSeconds > range.inSeconds ? range.outSeconds : duration,
-  };
+  // Memoized so it has a stable identity across renders: exportVideo's useCallback depends on
+  // it, and a fresh object every render would defeat that memoization.
+  const effectiveRange: Range = useMemo(
+    () => ({
+      inSeconds: range.inSeconds,
+      outSeconds: range.outSeconds > range.inSeconds ? range.outSeconds : duration,
+    }),
+    [range, duration],
+  );
 
   // A range from the previous clip should not survive into the next one. Adjusted during
   // render, following React's own pattern for this, rather than in an effect: setting state
@@ -300,9 +310,29 @@ export default function AsciiPlayer() {
   }, []);
 
   const openFile = useCallback((file: File) => {
-    setSource({ src: URL.createObjectURL(file), label: file.name });
+    setSource({ src: URL.createObjectURL(file), label: file.name, file });
     setNotice(null);
   }, []);
+
+  const exportVideo = useCallback(async () => {
+    const layout = layoutRef.current;
+    if (!layout) return;
+    const fps = fpsFor(EXPORT_FORMAT);
+    const timestamps = frameTimestamps({ ...effectiveRange, fps, speed });
+    const cellWidth = cellWidthFor(shellRef.current!.clientWidth, columns);
+    const frames = renderRange(
+      { url: source.src, file: source.file },
+      timestamps,
+      { mode, monoInk, charsetRamp: CHARSET_PRESETS[charset], columns, cellWidth },
+      new AbortController().signal,
+    );
+    const blob = await encodeMp4(frames, {
+      fps,
+      width: layout.cellColumns * cellWidth,
+      height: layout.cellRows * cellWidth * 2,
+    });
+    download(blob, "asciiplay.mp4");
+  }, [charset, columns, download, effectiveRange, mode, monoInk, source, speed]);
 
   useEffect(() => {
     if (!notice) return;
@@ -500,6 +530,9 @@ export default function AsciiPlayer() {
           </button>
           <button type="button" onClick={downloadCast}>
             .cast
+          </button>
+          <button type="button" onClick={() => void exportVideo()}>
+            export {EXPORT_FORMAT}
           </button>
           {webmUrl ? (
             <a href={webmUrl} download="asciiplay.webm" className="ready">

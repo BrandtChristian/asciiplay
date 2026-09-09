@@ -243,3 +243,36 @@ for the window size works, and being able to write into the master fd is what le
 controls be tested at all. Verified this way: quit, Esc, pause and resume, seek in both
 directions, seeking past the end ending playback, alternate screen entered and left exactly once,
 cursor restored, and no ffmpeg left behind.
+
+## 2026-09-09: the GIF byte estimate, calibrated against a real export
+
+`GIF_BYTES_PER_CELL` shipped in Task 4 as an admitted guess of 0.5, with a comment asking for a
+real measurement before anyone trusted it. Task 5 added the GIF encoder itself (gifenc, quantised
+to 256 colours per frame), so there was finally something real to measure it against.
+
+**The export:** big-buck-bunny.mp4, range 8s to 13s (five seconds, chosen because the clip's
+video track only starts at 6.625s, so anything earlier would export nothing), at the default 110
+columns. That range and grid produced 60 frames at 110x31 cells, GIF_FPS being 12.
+
+**Before:** at the old constant of 0.5 bytes per cell, `estimatedBytes("gif", 60, 110, 31)`
+predicted 102,300 bytes, which the readout rounds to "~0MB".
+
+**Actual:** the downloaded file was 8,050,633 bytes, seventy-nine times the estimate. Divided
+back out, that is 39.35 bytes per cell, not 0.5. The 0.5 guess was never in the right order of
+magnitude: ASCII rendered as filled glyph cells and then quantised to 256 colours does not
+compress the way the guess assumed, and gifenc's LZW pass is not finding the large flat runs that
+made 0.5 sound plausible on paper.
+
+**Chosen constant: 40.** Rounded up from the measured 39.35 rather than down, because this number
+only exists to feed `exceedsCeiling`'s refusal. Overestimating means a request that would have
+just barely fit gets refused instead, which is a minor annoyance. Underestimating means a request
+that will not fit sails past the refusal and the browser is left building an oversized GIF it
+should never have started, which is the actual failure the ceiling exists to prevent. At 40, the
+estimate for this same export is 8,184,000 bytes, 1.7% over the real 8,050,633, comfortably inside
+the "roughly 30%" target.
+
+`timeline.test.ts`'s ceiling tests needed no widening: the "under the ceiling" case
+(`estimatedBytes("gif", 12, 80, 24)`) stays at under a megabyte either way, and the "over the
+ceiling" case (`estimatedBytes("gif", 12 * 600, 220, 80)`) was already tens of megabytes over
+25MB at the old constant of 0.5, so raising the constant to 40 only pushed it further over, not
+back under.

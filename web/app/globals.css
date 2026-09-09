@@ -393,11 +393,18 @@ code {
   border-color: var(--amber-faint);
 }
 
-.source .hint {
+/* Shared with the format fieldset's H.264-unsupported explanation, not just the source clip. */
+.hint {
   flex-basis: 100%;
   color: var(--amber-faint);
   font-size: 0.6875rem;
   line-height: 1.4;
+}
+
+.estimate {
+  color: var(--amber-faint);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- drop affordance ---- */

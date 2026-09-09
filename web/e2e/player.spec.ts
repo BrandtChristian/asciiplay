@@ -276,6 +276,30 @@ test("a range with no video in it shows a message and downloads nothing", async 
   expect(downloaded, "a range with nothing in it should not produce a file").toBe(false);
 });
 
+test("exports the marked range as a real GIF", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  await page.getByRole("button", { name: "pause" }).click();
+  // 8 to 9, not 2 to 3: see the MP4 test above, the same lead-in applies here.
+  await seekWhilePaused(page, 8);
+  await page.getByRole("button", { name: "set in", exact: true }).click();
+  await seekWhilePaused(page, 9);
+  await page.getByRole("button", { name: "set out", exact: true }).click();
+  await page.getByRole("button", { name: "gif", exact: true }).click();
+
+  const download = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    page.getByRole("button", { name: "export gif", exact: true }).click(),
+  ]).then(([event]) => event);
+
+  const path = await download.path();
+  const bytes = await import("node:fs/promises").then((fs) => fs.readFile(path!));
+  expect(bytes.subarray(0, 6).toString("latin1")).toBe("GIF89a");
+});
+
 test("a range straddling the video's start still exports, but discloses the shortfall", async ({
   page,
 }) => {

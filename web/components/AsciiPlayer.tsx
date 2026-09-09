@@ -12,8 +12,16 @@ import {
   type RenderMode,
 } from "@/lib/ascii";
 import { renderRange, type ExportedFrame } from "@/lib/export/frames";
-import { encodeMp4 } from "@/lib/export/mp4";
-import { fpsFor, frameTimestamps, type ExportFormat, type Range } from "@/lib/export/timeline";
+import { encodeGif } from "@/lib/export/gif";
+import { canEncodeMp4, encodeMp4 } from "@/lib/export/mp4";
+import {
+  estimatedBytes,
+  exceedsCeiling,
+  fpsFor,
+  frameTimestamps,
+  type ExportFormat,
+  type Range,
+} from "@/lib/export/timeline";
 import { MONO_INKS, monoTreatment, type MonoInk } from "@/lib/mono";
 import {
   cellWidthFor,
@@ -40,8 +48,7 @@ const MODE_CHOICES: { label: string; mode: RenderMode; ink?: MonoInk }[] = [
 /** Recording accumulates ANSI text, so it needs a ceiling or a long session eats the tab. */
 const CAST_BYTE_LIMIT = 24 * 1024 * 1024;
 
-/** Fixed until a later task adds the format toggle; the button label already reads from this. */
-const EXPORT_FORMAT: ExportFormat = "mp4";
+const BYTES_PER_MB = 1024 * 1024;
 
 /**
  * Passes frames through unchanged while counting them. renderRange is a generator, so it cannot
@@ -97,6 +104,10 @@ export default function AsciiPlayer() {
   const [duration, setDuration] = useState(0);
   const [draggingOver, setDraggingOver] = useState(false);
   const [range, setRange] = useState<Range>({ inSeconds: 0, outSeconds: 0 });
+  const [format, setFormat] = useState<ExportFormat>("mp4");
+  // Assumed supported until the check resolves, so the common case (a browser that can encode
+  // H.264) never flashes a disabled button while waiting on an async capability probe.
+  const [mp4Supported, setMp4Supported] = useState(true);
 
   // An unset out point means "to the end", which is what a freshly loaded clip should offer.
   // Memoized so it has a stable identity across renders: exportVideo's useCallback depends on
@@ -109,6 +120,13 @@ export default function AsciiPlayer() {
     [range, duration],
   );
 
+  // Live readout of what exporting the marked range would cost, so the ceiling refusal in
+  // exportVideo is never the first time the user hears about the size.
+  const exportEstimate = useMemo(() => {
+    const frameCount = frameTimestamps({ ...effectiveRange, fps: fpsFor(format), speed }).length;
+    return estimatedBytes(format, frameCount, grid.columns, grid.rows);
+  }, [effectiveRange, format, speed, grid]);
+
   // A range from the previous clip should not survive into the next one. Adjusted during
   // render, following React's own pattern for this, rather than in an effect: setting state
   // unconditionally from an effect body causes an extra committed render every time source
@@ -118,6 +136,11 @@ export default function AsciiPlayer() {
     setPreviousSource(source);
     setRange({ inSeconds: 0, outSeconds: 0 });
   }
+
+  // This project ships no WebM fallback, so a browser that cannot encode H.264 must land on
+  // GIF rather than leave the format stuck on a disabled MP4 button. Same during-render pattern
+  // as the reset above, and self-limiting: once format is "gif" the condition is false.
+  if (!mp4Supported && format === "mp4") setFormat("gif");
 
   // The loop reads these through a ref so that changing a control never restarts it, and the
   // ref is written from an effect rather than during render.
@@ -135,6 +158,16 @@ export default function AsciiPlayer() {
     const video = videoRef.current;
     if (video) video.muted = muted;
   }, [muted]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void canEncodeMp4().then((supported) => {
+      if (!cancelled) setMp4Supported(supported);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -333,8 +366,21 @@ export default function AsciiPlayer() {
   const exportVideo = useCallback(async () => {
     const layout = layoutRef.current;
     if (!layout) return;
-    const fps = fpsFor(EXPORT_FORMAT);
+    const fps = fpsFor(format);
     const timestamps = frameTimestamps({ ...effectiveRange, fps, speed });
+
+    if (
+      exceedsCeiling(
+        format,
+        estimatedBytes(format, timestamps.length, layout.cellColumns, layout.cellRows),
+      )
+    ) {
+      setNotice(
+        "that range would make a GIF too big to build here. Shorten it or narrow the width",
+      );
+      return;
+    }
+
     const cellWidth = cellWidthFor(shellRef.current!.clientWidth, columns);
     const frames = renderRange(
       { url: source.src, file: source.file },
@@ -343,13 +389,17 @@ export default function AsciiPlayer() {
       new AbortController().signal,
     );
     const received = { count: 0 };
+    const encoderOptions = {
+      fps,
+      width: layout.cellColumns * cellWidth,
+      height: layout.cellRows * cellWidth * 2,
+    };
     try {
-      const blob = await encodeMp4(countedFrames(frames, received), {
-        fps,
-        width: layout.cellColumns * cellWidth,
-        height: layout.cellRows * cellWidth * 2,
-      });
-      download(blob, "asciiplay.mp4");
+      const blob =
+        format === "mp4"
+          ? await encodeMp4(countedFrames(frames, received), encoderOptions)
+          : await encodeGif(countedFrames(frames, received), encoderOptions);
+      download(blob, `asciiplay.${format}`);
       // A range only partly overlapping the available video (this clip's lead-in again, but
       // straddled rather than fully inside it) still produces a clean, playable file, just a
       // shorter one starting later than marked. That is worth disclosing even though it is not
@@ -365,7 +415,7 @@ export default function AsciiPlayer() {
       // encoder hand back a silently empty file.
       setNotice(error instanceof Error ? error.message : "export failed");
     }
-  }, [charset, columns, download, effectiveRange, mode, monoInk, source, speed]);
+  }, [charset, columns, download, effectiveRange, format, mode, monoInk, source, speed]);
 
   useEffect(() => {
     if (!notice) return;
@@ -551,6 +601,27 @@ export default function AsciiPlayer() {
         </fieldset>
 
         <fieldset>
+          <legend>format</legend>
+          <button
+            type="button"
+            aria-pressed={format === "mp4"}
+            disabled={!mp4Supported}
+            onClick={() => setFormat("mp4")}
+          >
+            mp4
+          </button>
+          <button type="button" aria-pressed={format === "gif"} onClick={() => setFormat("gif")}>
+            gif
+          </button>
+          <span className="estimate">~{Math.round(exportEstimate / BYTES_PER_MB)}MB</span>
+          {!mp4Supported ? (
+            <span className="hint">
+              this browser cannot encode H.264, so GIF is the only option here
+            </span>
+          ) : null}
+        </fieldset>
+
+        <fieldset>
           <legend>export</legend>
           <button type="button" onClick={recording ? stopRecording : startRecording}>
             {recording ? "stop" : "record"}
@@ -565,7 +636,7 @@ export default function AsciiPlayer() {
             .cast
           </button>
           <button type="button" onClick={() => void exportVideo()}>
-            export {EXPORT_FORMAT}
+            export {format}
           </button>
           {webmUrl ? (
             <a href={webmUrl} download="asciiplay.webm" className="ready">

@@ -16,11 +16,14 @@ export const GIF_FPS = 12;
 export const GIF_MAX_BYTES = 25 * 1024 * 1024;
 
 /**
- * Empirical, and deliberately so: a quantised GIF frame of ASCII costs roughly this per cell
- * after LZW, because large flat runs compress hard. Calibrate it against a real export rather
- * than trusting it, and see the note in Task 5.
+ * Measured, not guessed: exporting big-buck-bunny.mp4 from 8s to 13s at the default 110
+ * columns (60 frames at 110x31 cells, GIF_FPS = 12) produced an 8,050,633 byte file, which is
+ * 39.35 bytes per cell. Rounded up to 40 rather than to the nearer 39, because this constant
+ * feeds exceedsCeiling's refusal: overestimating means an occasional export gets refused when
+ * it would have fit, underestimating means the ceiling fails at the one job it has. See the
+ * 2026-09-09 entry in development-log.md for the full measurement.
  */
-const GIF_BYTES_PER_CELL = 0.5;
+const GIF_BYTES_PER_CELL = 40;
 /** Bitrate the MP4 encoder is asked for, so the estimate and the encoder agree. */
 export const MP4_BITRATE = 2_000_000;
 

@@ -194,3 +194,52 @@ like a dim smudge, because ASCII of a shaded forest is mostly the dark end of th
 correctly. Sampling nine timestamps for mean luminance and saturation found a passage at 152 and
 58, and the same code suddenly looked good. Worth generalising: when a renderer looks bad, check
 the input's statistics before changing the renderer.
+
+## 2026-09-09: the macOS audio path, verified at last, and index 0 is not the default device
+
+A Mac was finally available, so the path that shipped marked UNTESTED got tested. It was broken,
+and the way it was broken is the interesting part.
+
+**A CoreAudio device index is not a preference order.** The sink was hardcoded to `0`, written as
+if it meant "the default output". It does not. It is the first device CoreAudio happens to
+enumerate, and on this machine that is the DELL monitor, where `AudioQueueStart` fails after a
+ten second stall and ffmpeg exits 234 having emitted a single `out_time_us=N/A`. Measured
+against the enumeration: index `2` (the built-in speakers) plays, index `1` (a microphone) fails
+in 0.1s, index `0` stalls then fails. So the mechanism was right, the URL genuinely is a device
+index, and only the value was wrong.
+
+The fix is to pass `-`, which leaves `audio_device_index` at its default of -1 so the muxer
+follows the system default output. That is also the form ffmpeg's own documentation uses, and it
+is better than any index we could pick, because it follows the output the user has chosen.
+
+**The earlier entry described the wrong failure mechanism, and it matters.** It said a wrong sink
+means the audio process fails to start, `Audio::start(..).ok()` yields None, and the video plays
+silently. The spawn actually succeeds: ffmpeg starts fine and fails later, when the muxer opens
+the device. The graceful degradation is real but arrives by another route, namely that no
+progress line ever parses, the anchor stays empty, and `PlaybackClock` falls through to wall
+time. Same visible outcome, completely different place to put a breakpoint.
+
+**How to test an audio path in an open office.** Build the fixture's audio track from
+`anullsrc`, so it is digital silence. That exercises the whole path, device open, sample pacing,
+progress output, anchor, and makes no sound. The proof the device is really consuming is the wall
+clock: an 8 second clip takes 8.1 seconds, where decoding alone would finish instantly. Only the
+final question, whether sound is audible, needs a human and a single deliberate run.
+
+**A flag both branches honour cannot tell you which branch ran.** The plan was to prove the audio
+clock was driving the video by passing `--av-offset -2` and watching playback finish early. It
+does finish early, and it proves nothing: `position_at` subtracts `offset_seconds` in the anchor
+branch *and* in the wall-time fallback, so the broken binary shortens by exactly the same amount.
+The honest answer was a throwaway instrumented build printing each parsed anchor, which showed 15
+anchors climbing 0.619 to 7.659 across the clip with the fix, and none without audio.
+
+**A tag is not a release.** `v0.1.0` pointed six commits behind main, so `install.sh` was serving
+a binary that rejected the README's own `--charset` examples with "unexpected argument". The
+README and the shipped artefact drifted apart silently, because nothing checks one against the
+other. Worth a glance at `git log <tag>..main` before pointing anyone at an install line.
+
+**Driving a TUI from a harness on macOS.** `script` cannot help: it calls `tcgetattr` on its own
+stdin, which is a socket under a tool runner, and dies. `pty.openpty` plus a `TIOCSWINSZ` ioctl
+for the window size works, and being able to write into the master fd is what let the transport
+controls be tested at all. Verified this way: quit, Esc, pause and resume, seek in both
+directions, seeking past the end ending playback, alternate screen entered and left exactly once,
+cursor restored, and no ffmpeg left behind.

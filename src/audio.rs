@@ -105,7 +105,8 @@ impl PlaybackClock {
     }
 }
 
-/// A sibling ffmpeg decoding only audio, straight into PulseAudio (PipeWire serves it here).
+/// A sibling ffmpeg decoding only audio, straight into the system's audio output: PulseAudio on
+/// Linux (PipeWire serves it here), AudioToolbox on macOS.
 pub struct Audio {
     child: Child,
     anchor: Arc<Mutex<Option<Anchor>>>,
@@ -126,8 +127,9 @@ pub fn audio_args(target: &str, seek_seconds: f64, buffer_milliseconds: u32) -> 
     args.push("-i".into());
     args.push(target.into());
     args.push("-vn".into());
-    // Progress goes to stdout because the pulse muxer takes the audio, so stdout is free. This
-    // is machine readable and stable, unlike ffplay's human readable status line.
+    // Progress goes to stdout because the audio muxer takes the audio, so stdout is free. This
+    // is machine readable and stable, unlike ffplay's human readable status line. The "-" the
+    // macOS sink passes is a device index and not stdout, so it does not collide with this.
     args.push("-progress".into());
     args.push("pipe:1".into());
     args.extend(audio_output_args(buffer_milliseconds));
@@ -148,13 +150,19 @@ fn audio_output_args(buffer_milliseconds: u32) -> Vec<String> {
     ]
 }
 
-/// UNTESTED: written without a Mac to hand. If the muxer name or sink is wrong the audio
-/// process simply fails to start, `Audio::start(..).ok()` yields None, and the video plays
-/// silently rather than the player failing.
+/// Verified on macOS 26.6 arm64. The device is deliberately left unset: index 0 is only the
+/// first device CoreAudio enumerates, which on a machine with an external monitor is the
+/// monitor, and starting an AudioQueue there fails after a ten second stall.
+///
+/// Should audio fail anyway, the picture still plays. ffmpeg then writes `out_time_us=N/A`,
+/// nothing parses, the anchor stays empty and `PlaybackClock` falls through to wall time. Note
+/// that this is not the `Audio::start(..).ok()` path: the process spawns fine and fails later,
+/// at the point the muxer opens the device.
 #[cfg(target_os = "macos")]
 fn audio_output_args(_buffer_milliseconds: u32) -> Vec<String> {
-    // -buffer_duration is a pulse option and audiotoolbox rejects it. The sink is a device index.
-    vec!["-f".into(), "audiotoolbox".into(), "0".into()]
+    // -buffer_duration is a pulse option and audiotoolbox rejects it. The URL is a device index,
+    // and "-" leaves it unset, so the muxer follows the system default output.
+    vec!["-f".into(), "audiotoolbox".into(), "-".into()]
 }
 
 /// Pull the microsecond position out of one ffmpeg progress line.
@@ -274,6 +282,21 @@ mod tests {
         assert!(args.contains(&"-vn".to_string()));
         #[cfg(target_os = "linux")]
         assert!(args.contains(&"pulse".to_string()));
+        #[cfg(target_os = "macos")]
+        assert!(args.contains(&"audiotoolbox".to_string()));
+    }
+
+    /// A pinned index 0 shipped once and silenced any Mac whose first enumerated CoreAudio device
+    /// is not a usable output, so the absence of a device selection is what to hold still.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_leaves_the_output_device_to_the_system() {
+        let args = audio_args("clip.mp4", 0.0, 100);
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+        assert!(!args.contains(&"0".to_string()));
+        assert!(!args.contains(&"-audio_device_index".to_string()));
+        // audiotoolbox rejects it, so it must not leak in from the pulse path.
+        assert!(!args.contains(&"-buffer_duration".to_string()));
     }
 
     #[test]

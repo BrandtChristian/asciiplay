@@ -115,10 +115,11 @@ two line wrapper around `zig cc`, which brings its own libc and compiler-rt.
 
 ## Platform support
 
-Linux x86_64 is what this is developed and tested on. macOS builds and is released for both
-architectures, but **its audio path is untested**: ffmpeg's PulseAudio output does not exist
-there, so it uses AudioToolbox instead, and if that is wrong the video plays silently rather than
-failing. Reports welcome.
+Linux x86_64 is what this is developed on. **macOS arm64 is verified** on macOS 26.6: install,
+playback, the transport controls, seeking and the audio path. ffmpeg's PulseAudio output does not
+exist there, so it uses AudioToolbox, which is pointed at no particular device and so follows
+whatever output you have selected in the system. macOS x86_64 is built and released but has not
+been run on hardware. Reports welcome.
 
 ## Notes
 

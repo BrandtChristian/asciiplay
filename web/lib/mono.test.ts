@@ -36,6 +36,15 @@ describe("monoTreatment", () => {
     }
   });
 
+  it("marks exactly the light grounded treatments as paper", () => {
+    // Paper is not a glowing screen, so the CRT scanline overlay is suppressed over it. Keeping
+    // the flag and the ground in step here means a future light treatment cannot forget one.
+    for (const ink of MONO_INKS) {
+      const { ground, paper } = monoTreatment(ink);
+      expect(paper, `${ink} disagrees with its own ground`).toBe(hexLuminance(ground) > 127);
+    }
+  });
+
   it("gives reverse the only light ground", () => {
     const lightGrounded = MONO_INKS.filter(
       (ink: MonoInk) => hexLuminance(monoTreatment(ink).ground) > 127,

@@ -16,12 +16,17 @@ export interface MonoTreatment {
   /** Six digit hex, because the tests read the channels back out of it. */
   ground: string;
   glyph: string;
+  /**
+   * Ink on paper rather than light on a screen. The CRT scanline overlay is suppressed over
+   * paper, where it multiplies into visible grey banding instead of vanishing into black.
+   */
+  paper: boolean;
 }
 
 const TREATMENTS: Record<MonoInk, MonoTreatment> = {
-  amber: { label: "amber", ground: "#000000", glyph: "#ffb454" },
-  white: { label: "b&w", ground: "#000000", glyph: "#ffffff" },
-  reverse: { label: "reverse", ground: "#ffffff", glyph: "#000000" },
+  amber: { label: "amber", ground: "#000000", glyph: "#ffb454", paper: false },
+  white: { label: "b&w", ground: "#000000", glyph: "#ffffff", paper: false },
+  reverse: { label: "reverse", ground: "#ffffff", glyph: "#000000", paper: true },
 };
 
 export function monoTreatment(ink: MonoInk): MonoTreatment {

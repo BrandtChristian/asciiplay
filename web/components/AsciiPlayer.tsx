@@ -390,7 +390,10 @@ export default function AsciiPlayer() {
         }}
       >
         <canvas ref={displayRef} className="output" />
-        <div className="scanlines" aria-hidden="true" />
+        {/* Paper does not have scanlines, and a multiply overlay on white is grey banding. */}
+        {!(mode === "mono" && monoTreatment(monoInk).paper) && (
+          <div className="scanlines" aria-hidden="true" />
+        )}
         {draggingOver ? <div className="drop-hint">drop to play it here</div> : null}
         <video
           ref={videoRef}

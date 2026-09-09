@@ -160,3 +160,15 @@ test("the mono treatments invert the paper, not just the ink", async ({ page }) 
   // wrong by only swapping the glyph colour leaves a dark canvas and looks like a negative.
   expect(onWhite!.litFraction, "reverse should sit on a light ground").toBeGreaterThan(0.8);
 });
+
+test("reverse mode drops the CRT scanlines, which only work on a dark screen", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".scanlines")).toBeVisible();
+
+  await page.getByRole("button", { name: "reverse", exact: true }).click();
+  // The overlay multiplies, so over black it vanishes and over white paper it is grey banding.
+  await expect(page.locator(".scanlines")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "amber", exact: true }).click();
+  await expect(page.locator(".scanlines")).toBeVisible();
+});

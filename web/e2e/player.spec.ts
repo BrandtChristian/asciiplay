@@ -115,20 +115,33 @@ test("pause actually stops the picture, and play resumes it", async ({ page }) =
     .poll(async () => (await canvasStats(page))?.litFraction ?? 0, { timeout: 15_000 })
     .toBeGreaterThan(0.01);
 
+  // Must hash the whole frame, not a slice of the data URL: toDataURL().slice(-2000) only
+  // covers the bottom rows of the PNG, and a frame whose lower region happens to be static
+  // produces the same fingerprint as the previous one, making a real resume look frozen.
   const fingerprint = async () =>
-    page.evaluate(() =>
-      (document.querySelector("canvas") as HTMLCanvasElement).toDataURL().slice(-2000),
-    );
+    page.evaluate(() => {
+      const canvas = document.querySelector("canvas") as HTMLCanvasElement;
+      const context = canvas.getContext("2d")!;
+      const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+      let hash = 0;
+      for (let index = 0; index < data.length; index += 4) {
+        hash = (hash * 31 + data[index] + data[index + 1] * 7 + data[index + 2] * 13) | 0;
+      }
+      return hash;
+    });
 
   await page.getByRole("button", { name: "pause" }).click();
   await page.waitForTimeout(400);
   const paused = await fingerprint();
+  // Fixed wait is correct here: proving the canvas does NOT change means waiting a set period
+  // and then checking, not polling until something happens.
   await page.waitForTimeout(900);
   expect(await fingerprint(), "the canvas kept changing while paused").toBe(paused);
 
   await page.getByRole("button", { name: "play" }).click();
-  await page.waitForTimeout(900);
-  expect(await fingerprint(), "play did not resume").not.toBe(paused);
+  await expect
+    .poll(fingerprint, { timeout: 10_000, message: "play did not resume" })
+    .not.toBe(paused);
 });
 
 test("the seek bar moves the video", async ({ page }) => {

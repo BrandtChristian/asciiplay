@@ -151,10 +151,14 @@ test("in and out markers define a range on the transport", async ({ page }) => {
   // and the marker button reads the wrong instant.
   await page.getByRole("button", { name: "pause" }).click();
 
-  // Locator.fill() dispatches both "input" and "change" on a range input. While paused, no
-  // timeupdate arrives between the two to sync React's position state, so React's controlled-input
-  // reconciliation reverts the seek and replays it at the stale value. A single native "input"
-  // event, the same event a real drag fires, does not hit that.
+  // Locator.fill() dispatches "input" then "change" synchronously on a range input. The
+  // "input" seeks to the target value, but React's controlled-input re-render reverts the
+  // input's DOM value before "change" fires, so "change" replays the onChange handler against
+  // that reverted, stale value and the seek lands the video back near zero. A single native
+  // "input" event, which is what a real drag fires, only triggers the first half of that and
+  // avoids the replay. A paused seek does fire timeupdate and does reach React state, so this is
+  // a quirk of fill() on a controlled range input, not an app bug: seekTo deliberately does not
+  // also call setPosition.
   const seekWhilePaused = (seconds: number) =>
     page.locator(".seek").evaluate((input: HTMLInputElement, value: number) => {
       const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;

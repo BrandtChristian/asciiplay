@@ -661,9 +661,11 @@ The first vertical slice: one button that produces a real file. Audio, progress 
 
 Run: `bun add mediabunny`
 
-Then read the installed API surface before writing against it. The spec flags a real disagreement between mediabunny's README and its guide over the quality option's name:
-
-Run: `ls node_modules/mediabunny/dist/` and open the bundled `.d.ts` to confirm the exact spelling of `CanvasSource`'s options and of `Output.addVideoTrack`. Use what the types say, not what this plan or the docs say.
+This question has since been answered by reading `mediabunny@1.56.0`'s own types. See
+`docs/reference/mediabunny-1.56-api.md` and use the forms it
+gives. The short version: `VideoEncodingConfig` carries both `quality` and `bitrate`, `bitrate`
+is marked deprecated, so pass `quality: new Quality({ bitrate: MP4_BITRATE })`. If the installed
+version differs from 1.56.0, re-read the types and trust those over the notes.
 
 - [ ] **Step 2: Write the failing e2e test**
 
@@ -792,7 +794,10 @@ export async function* renderRange(
 }
 ```
 
-Note on `sample.toCanvasImageSource()`: confirm the accessor name against the installed `.d.ts` in Step 1. If mediabunny exposes only `sample.draw(context, ...)`, draw the sample into a scratch canvas first and pass that canvas as `source` instead.
+`sample.toCanvasImageSource()` is confirmed to exist, returning `OffscreenCanvas | VideoFrame`,
+so no fallback is needed. `samplesAtTimestamps` yields `VideoSample | null`, so the null skip
+above is required rather than defensive. Use `displayWidth` and `displayHeight` rather than the
+coded dimensions, since they account for pixel aspect ratio.
 
 - [ ] **Step 5: Write the MP4 encoder**
 
@@ -847,7 +852,9 @@ export async function encodeMp4(
 }
 ```
 
-The `bitrate` versus `quality` option name and the `videoSource.add` signature both come from Step 1's reading of the types. Correct them there rather than guessing.
+Corrected against the installed types: the option is `quality`, not the deprecated `bitrate`,
+and `add(timestamp, duration?, encodeOptions?)` is confirmed. Setting `frameRate` on the track
+also snaps every timestamp to that rate, which is the determinism this feature exists for.
 
 - [ ] **Step 6: Wire the button**
 
@@ -1169,7 +1176,11 @@ Expected: PASS.
 
 - [ ] **Step 6: Add the audio track to the MP4 output**
 
-In `mp4.ts`, when `options.audio` is set, read the input's audio and add it to the output. The exact reading API is the second detail the spec flagged as unresolved: check the installed types for an audio sink that yields `AudioBuffer` or `AudioSample`, pair it with the matching `AudioBufferSource` or `AudioSampleSource`, and trim to `options.audio.range`. If no sink fits, run mediabunny's `Conversion` for the audio track alone with `trim` set, and mux the result.
+In `mp4.ts`, when `options.audio` is set, read the input's audio and add it to the output. The
+reading API is resolved: pair `AudioBufferSink` (read) with `AudioBufferSource` (write), and trim
+to `options.audio.range`. See `docs/reference/mediabunny-1.56-api.md`.
+`AudioSampleSink` with `AudioSampleSource` is the equivalent alternative if the buffer route
+proves awkward.
 
 Whichever route the types support, the failure mode is the same: catch, skip the audio track, and surface the reason through the notice. A silent MP4 beats no MP4.
 
@@ -1312,4 +1323,9 @@ git commit -m "README: the web app's exports, as they now are"
 
 **Image input is not in this plan.** It is the second plan, `2026-09-09-web-image-input.md`, and depends only on Task 1 of this one.
 
-**Two API details are load-bearing and unresolved by design**, both flagged in the spec and both to be settled by reading the installed `.d.ts` rather than trusting this plan: `CanvasSource`'s quality option name and `videoSource.add`'s signature in Task 4, and the audio reading API in Task 6. A plan that guessed them would read as more finished and be worth less.
+**The two API details the spec left open have since been resolved** by installing
+`mediabunny@1.56.0` and reading its types, before Task 4 needed them. The answers, with the
+exact forms to use, are in `docs/reference/mediabunny-1.56-api.md`,
+and the relevant task steps now cite it. Notably `bitrate` turned out to be deprecated in favour
+of `quality`, which is the disagreement the spec noticed between mediabunny's README and its
+guide. Re-read the types if the installed version is not 1.56.0.

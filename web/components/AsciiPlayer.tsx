@@ -364,8 +364,11 @@ export default function AsciiPlayer() {
     const { width, height } = pixelSizeFor(layout.cellColumns, layout.cellRows, cellWidth);
 
     if (exceedsCeiling(format, estimatedBytes(format, timestamps.length, width, height))) {
+      // Not "narrow the width": cellWidth = floor(shellWidth / columns), so exported width stays
+      // near the shell's own width regardless of columns (see GIF_BYTES_PER_PIXEL's comment in
+      // timeline.ts). Narrowing that control does not shrink the export, and can make it bigger.
       setNotice(
-        "that range would make a GIF too big to build here. Shorten it or narrow the width",
+        "that range would make a GIF too big to build here. Shorten the range, or export MP4, which is about six times smaller",
       );
       return;
     }

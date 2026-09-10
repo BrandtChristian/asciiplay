@@ -53,17 +53,20 @@ const CAST_BYTE_LIMIT = 24 * 1024 * 1024;
 const BYTES_PER_MB = 1024 * 1024;
 
 /**
- * Passes frames through unchanged while counting them. renderRange is a generator, so it cannot
- * both yield frames and hand back how many of the requested timestamps actually produced one; the
- * caller already knows how many it asked for, so it is simpler for the caller to count what it
- * received and compare, than for the generator to report on itself.
+ * Passes frames through unchanged while counting them and reporting each count for the progress
+ * readout. renderRange is a generator, so it cannot both yield frames and hand back how many of
+ * the requested timestamps actually produced one; the caller already knows how many it asked for,
+ * so it is simpler for the caller to count what it received and compare, than for the generator
+ * to report on itself.
  */
 async function* countedFrames(
   frames: AsyncIterable<ExportedFrame>,
   received: { count: number },
+  onProgress: (done: number) => void,
 ): AsyncGenerator<ExportedFrame> {
   for await (const frame of frames) {
     received.count += 1;
+    onProgress(received.count);
     yield frame;
   }
 }
@@ -81,9 +84,10 @@ export default function AsciiPlayer() {
   const castRef = useRef<CastFrame[]>([]);
   const castBytesRef = useRef(0);
   const recordStartRef = useRef(0);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const webmChunksRef = useRef<Blob[]>([]);
   const fpsWindowRef = useRef({ frames: 0, since: 0 });
+  // Not React state: aborting must be reachable from the cancel button, the unmount cleanup,
+  // and exportVideo itself, none of which need a re-render when the controller changes.
+  const exportAbortRef = useRef<AbortController | null>(null);
   // Mirrors `grid` state outside React. The rAF loop below is set up once in a [] effect, so
   // reading `grid` state from inside it would always see its initial value; this ref is what
   // makes the comparison against the latest layout actually work across frames. Carries
@@ -101,7 +105,6 @@ export default function AsciiPlayer() {
   const [recording, setRecording] = useState(false);
   const [measuredFps, setMeasuredFps] = useState(0);
   const [grid, setGrid] = useState({ columns: 0, rows: 0, cellWidth: 0 });
-  const [webmUrl, setWebmUrl] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [playing, setPlaying] = useState(true);
   const [position, setPosition] = useState(0);
@@ -112,6 +115,12 @@ export default function AsciiPlayer() {
   // Assumed supported until the check resolves, so the common case (a browser that can encode
   // H.264) never flashes a disabled button while waiting on an async capability probe.
   const [mp4Supported, setMp4Supported] = useState(true);
+  // Non-null for the duration of an export: drives the progress readout, disables the export
+  // button, and shows the cancel button. Cleared in exportVideo's finally, so it comes back to
+  // null however the export ends (success, cancel, or error).
+  const [exportProgress, setExportProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
 
   // An unset out point means "to the end", which is what a freshly loaded clip should offer.
   // Memoized so it has a stable identity across renders: exportVideo's useCallback depends on
@@ -297,47 +306,14 @@ export default function AsciiPlayer() {
   }, []);
 
   const startRecording = useCallback(() => {
-    const display = displayRef.current;
-    const video = videoRef.current;
-    if (!display) return;
     castRef.current = [];
     castBytesRef.current = 0;
     recordStartRef.current = performance.now();
-    webmChunksRef.current = [];
-    setWebmUrl(null);
-
-    try {
-      const stream = display.captureStream(30);
-      if (video && !video.muted) {
-        // captureStream on a media element is not universally available, so audio is a bonus
-        // rather than a requirement.
-        const withAudio = (
-          video as HTMLVideoElement & {
-            captureStream?: () => MediaStream;
-          }
-        ).captureStream?.();
-        withAudio?.getAudioTracks().forEach((track) => stream.addTrack(track));
-      }
-      const recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) webmChunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        const blob = new Blob(webmChunksRef.current, { type: "video/webm" });
-        setWebmUrl(URL.createObjectURL(blob));
-      };
-      recorder.start();
-      recorderRef.current = recorder;
-    } catch {
-      setNotice("this browser will not record the canvas, but .cast still works");
-    }
     setRecording(true);
   }, []);
 
   const stopRecording = useCallback(() => {
     setRecording(false);
-    recorderRef.current?.stop();
-    recorderRef.current = null;
   }, []);
 
   const download = useCallback((blob: Blob, filename: string) => {
@@ -394,14 +370,19 @@ export default function AsciiPlayer() {
       return;
     }
 
+    const controller = new AbortController();
+    exportAbortRef.current = controller;
+    setExportProgress({ done: 0, total: timestamps.length });
+
     const frameSource: FrameSource = { url: source.src, file: source.file };
     const frames = renderRange(
       frameSource,
       timestamps,
       { mode, monoInk, charsetRamp: CHARSET_PRESETS[charset], columns, cellWidth },
-      new AbortController().signal,
+      controller.signal,
     );
     const received = { count: 0 };
+    const reportProgress = (done: number) => setExportProgress({ done, total: timestamps.length });
     // A sped-up export of a range straddling the lead-in drops audio AND under-fills its frame
     // count at the same time, so these collect rather than each overwriting the last: the user
     // should learn every reason this file is not quite what they marked, not just the last one.
@@ -421,7 +402,7 @@ export default function AsciiPlayer() {
           // it, a probing failure would leave the file silent with no explanation at all.
           notices.push(AUDIO_READ_FAILURE_REASON);
         }
-        blob = await encodeMp4(countedFrames(frames, received), {
+        blob = await encodeMp4(countedFrames(frames, received, reportProgress), {
           fps,
           width,
           height,
@@ -429,8 +410,16 @@ export default function AsciiPlayer() {
           onAudioDropped: (reason) => notices.push(reason),
         });
       } else {
-        blob = await encodeGif(countedFrames(frames, received), { fps, width, height });
+        blob = await encodeGif(countedFrames(frames, received, reportProgress), {
+          fps,
+          width,
+          height,
+        });
       }
+      // Aborting stops renderRange from yielding more frames, but the encoder still finishes
+      // normally on whatever partial stream it already had, so cancellation has to be caught
+      // here rather than relying on an exception that may never come.
+      if (controller.signal.aborted) return;
       download(blob, `asciiplay.${format}`);
       // A range only partly overlapping the available video (this clip's lead-in again, but
       // straddled rather than fully inside it) still produces a clean, playable file, just a
@@ -443,12 +432,23 @@ export default function AsciiPlayer() {
       }
       if (notices.length > 0) setNotice(notices.join("; "));
     } catch (error) {
+      if (controller.signal.aborted) return;
       // Reachable, not theoretical: any marked range inside this clip's audio-only lead-in has
       // no video sample at all, and renderRange throws for exactly that rather than letting the
       // encoder hand back a silently empty file.
       setNotice(error instanceof Error ? error.message : "export failed");
+    } finally {
+      setExportProgress(null);
+      exportAbortRef.current = null;
     }
   }, [charset, columns, download, effectiveRange, format, mode, monoInk, source, speed]);
+
+  const cancelExport = useCallback(() => {
+    exportAbortRef.current?.abort();
+  }, []);
+
+  // A decoder mid-export must not keep running after the component that owns it unmounts.
+  useEffect(() => () => exportAbortRef.current?.abort(), []);
 
   useEffect(() => {
     if (!notice) return;
@@ -668,13 +668,22 @@ export default function AsciiPlayer() {
           <button type="button" onClick={downloadCast}>
             .cast
           </button>
-          <button type="button" onClick={() => void exportVideo()}>
+          <button
+            type="button"
+            disabled={exportProgress !== null}
+            onClick={() => void exportVideo()}
+          >
             export {format}
           </button>
-          {webmUrl ? (
-            <a href={webmUrl} download="asciiplay.webm" className="ready">
-              webm ready
-            </a>
+          {exportProgress ? (
+            <>
+              <span className="export-progress">
+                {exportProgress.done} / {exportProgress.total} frames
+              </span>
+              <button type="button" onClick={cancelExport}>
+                cancel
+              </button>
+            </>
           ) : null}
         </fieldset>
       </div>

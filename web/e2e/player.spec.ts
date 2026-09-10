@@ -474,3 +474,24 @@ test("a range straddling the video's start still exports, but discloses the shor
     message: "partial-export notice never appeared",
   }).toContainText("the rest of that range has no video", { timeout: 15_000 });
 });
+
+test("a cancelled export downloads nothing and leaves the panel idle", async ({ page }) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  let downloaded = false;
+  page.on("download", () => {
+    downloaded = true;
+  });
+
+  await page.getByRole("button", { name: "export mp4", exact: true }).click();
+  await expect(page.locator(".export-progress")).toBeVisible();
+  await page.getByRole("button", { name: "cancel", exact: true }).click();
+
+  await expect(page.locator(".export-progress")).toBeHidden();
+  await expect(page.getByRole("button", { name: "export mp4", exact: true })).toBeEnabled();
+  await page.waitForTimeout(1500);
+  expect(downloaded, "a cancelled export still produced a file").toBe(false);
+});

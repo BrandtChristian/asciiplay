@@ -68,7 +68,12 @@ export async function* renderRange(
     // frame. Measured against captured reference frames, not just inferred.)
     let matched = 0;
     for await (const sample of sink.samplesAtTimestamps(timestamps)) {
-      if (signal.aborted) return;
+      if (signal.aborted) {
+        // The sink already decoded this sample before the abort was noticed, so it is not the
+        // caller's to leak: without this close, cancelling mid-export leaks one decoded frame.
+        sample?.close();
+        return;
+      }
       if (!sample) continue;
       matched += 1;
       const frame = renderFrame(canvases, {

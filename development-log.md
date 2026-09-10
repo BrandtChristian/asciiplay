@@ -301,3 +301,42 @@ cell missed these same three points by 13x to 79x, nowhere near even a loose ban
 ceiling test needed its inputs changed for the new pixel-based signature, not its assertions
 weakened: it now checks 12 frames versus 200 frames at the real 1,100x620 resolution rather than
 arbitrary cell counts.
+
+## 2026-09-10: player time and track time already share one clock, and a test range that never left the lead-in hid the bug for two review passes
+
+An earlier version of `renderRange` (`web/lib/export/frames.ts`) added `track.getFirstTimestamp()`
+to every requested timestamp before calling `samplesAtTimestamps`, on the assumption that a track
+whose first packet is not at zero means the player's own clock had been renormalised around it.
+It had not. mediabunny already reads a track's own timestamps directly, and `<video>.currentTime`
+shares that same timeline unrenormalised, so no offset belongs between them at all. The fix, once
+found, was to delete the offset rather than correct it.
+
+**What the offset actually did.** The bundled `web/public/clips/big-buck-bunny.mp4` has its AAC
+audio starting at 0.0s but its H.264 video starting only at 6.625s and running to 18.0s, so the
+first 6.6 seconds of player time is a real audio-only lead-in: the video element shows one frozen
+frame the whole time. Adding 6.625s to every requested timestamp shifted every export exactly
+that far late, and a request past the track's own end (past roughly 11.4s of player time)
+overshot and clamped to the last frame instead of failing.
+
+**Why this shipped anyway, and why it matters more than the bug itself.** The committed test
+exported the range 2 to 3 seconds, entirely inside that lead-in. Without the offset, that range
+legitimately contains no video and correctly produces nothing. With the offset, 2 to 3 becomes
+8.625 to 9.625, which is real video, so the export produced plausible-looking frames and the test
+passed. The test passed ONLY WITH THE BUG PRESENT: removing the offset would have made that exact
+test fail, since it would have gone back to correctly exporting nothing. ffprobe, run against the
+output, agreed with the test: correct codec, correct frame count, correct frame rate, correct
+duration. All of that is structure, and structure cannot see which frames are inside. Ffprobe has
+no way to know whether frame 1 is a fair sample of second 8 of the source or second 14.
+
+**The tool that finally caught it had to prove itself before it could be trusted.** A frame by
+frame RMSE comparator (blur and normalise both sides first, so h264's softening of glyph detail
+does not dominate the distance) was validated against a known case before being pointed at an
+unknown one: a crisp preview captured at 14 seconds ranked its own corresponding frame at RMSE
+0.000 and its immediate neighbour at 0.100, which is the shape a working comparator has to
+produce. Only then was it used to test the real claim, and the decisive step was a prediction made
+before running the comparison, not a result read afterward and rationalised: if the offset bug
+really added 6.625 seconds, marking the range 8 to 9 should export frames matching the live
+preview around 14.625 seconds, not around 8 or 9. It measured RMSE 0.044 against the frame at 15
+seconds, consistent with 14.625 sitting closer to 15 than to 14, and nowhere near the marked 8-9
+range. Predicting the number before measuring it is what turned "the two don't match" into "the
+mismatch is exactly the offset, and nothing else."

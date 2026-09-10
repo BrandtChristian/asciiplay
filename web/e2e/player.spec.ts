@@ -495,3 +495,35 @@ test("a cancelled export downloads nothing and leaves the panel idle", async ({ 
   await page.waitForTimeout(1500);
   expect(downloaded, "a cancelled export still produced a file").toBe(false);
 });
+
+test("a browser that cannot encode H.264 disables MP4, hints at GIF, and flips the format itself", async ({
+  page,
+}) => {
+  // Every Chromium build Playwright ships can encode H.264, so mp4Supported has never actually
+  // been false in a test, or by hand: this path has never run anywhere. Stub the exact WebCodecs
+  // check mediabunny's canEncodeVideo calls, before any app code runs, so it reports unsupported
+  // the way a real browser without H.264 encode would: a resolved `{ supported: false }`, not a
+  // thrown exception, which is the case canEncodeVideo is written to treat as "no" as well.
+  await page.addInitScript(() => {
+    window.VideoEncoder.isConfigSupported = (() =>
+      Promise.resolve({ supported: false })) as typeof VideoEncoder.isConfigSupported;
+  });
+
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  // The probe no longer runs on mount, so it has to be triggered by the same interaction the
+  // app now waits for before the disabled state or hint can appear.
+  await page.locator("fieldset", { hasText: "export" }).hover();
+
+  await expect(page.getByRole("button", { name: "mp4", exact: true })).toBeDisabled();
+  await expect(
+    page.locator(".hint", { hasText: "this browser cannot encode H.264" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "gif", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});

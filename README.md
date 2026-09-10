@@ -42,8 +42,10 @@ where the shell mangles the URL before this program ever sees it, so quoting is 
 There is a browser version that renders ASCII from any video you drop on it. The file is read
 locally and never uploaded, which is the whole reason it has no server: the page is static.
 
-It has live controls (mode, charset, width, speed, sound), a transport, and exports to WebM, PNG,
-plain text and an asciinema `.cast` that replays in a real terminal. The source lives in `web/`.
+It has live controls (mode, charset, width, speed, sound), a transport with in and out markers to
+mark a range, and exports that range to MP4, GIF, PNG, or an asciinema `.cast` that replays in a
+real terminal. A browser without an H.264 encoder is offered GIF only, since this project
+deliberately ships no WebM fallback. The source lives in `web/`.
 
 ## Install
 

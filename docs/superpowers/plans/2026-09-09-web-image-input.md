@@ -10,7 +10,20 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-09-web-export-and-image-input-design.md`
 
-**Depends on:** `docs/superpowers/plans/2026-09-09-web-offline-export.md` Task 1 only, which extracts `lib/render-frame.ts`. The rest of that plan is independent of this one and can land before or after.
+**Depends on:** `docs/superpowers/plans/2026-09-09-web-offline-export.md` Task 1 only, which extracts `lib/render-frame.ts`. That plan has since landed in full.
+
+**Do this first, and it is not optional.** The export plan's final whole-branch review found that
+the spec named a `components/ExportPanel.tsx` which no task ever created, so all of the export UI
+accreted into `AsciiPlayer.tsx` instead. That component is now 706 lines, up from 546, and about
+200 of those are export concern: the export callback, the frame-counting wrapper, the estimate
+formatting, the capability probe, the notice aggregation rule and three JSX blocks.
+
+This plan is where that bill comes due. Task 1 Step 6 asks for the transport, speed, mute, in/out
+markers, MP4 and GIF to be ABSENT in image mode. With an ExportPanel that is "do not render it".
+Without one it is conditional JSX threaded through the render body of a 706-line component, plus a
+guard so the export callback cannot run against an image source. Extract the panel first, as its
+own commit with the e2e suite as the net, exactly the way the renderer extraction was done and
+verified. Then this plan's Task 1 Step 6 becomes one line.
 
 ## Global Constraints
 

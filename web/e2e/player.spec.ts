@@ -62,6 +62,18 @@ function seekWhilePaused(page: import("@playwright/test").Page, seconds: number)
   }, seconds);
 }
 
+// Same controlled-input replay problem as the seek bar above, so this drives the speed slider
+// the same way: one native "input" event rather than fill()'s input-then-change pair.
+function setSpeed(page: import("@playwright/test").Page, speed: number) {
+  return page
+    .locator('input[aria-label="speed"]')
+    .evaluate((input: HTMLInputElement, value: number) => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setValue.call(input, String(value));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, speed);
+}
+
 test("arrives playing, with a canvas painted from the video", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("canvas")).toBeVisible();
@@ -317,13 +329,7 @@ test("a speed other than 1x exports video only, and says why", async ({ page }) 
   await seekWhilePaused(page, 9);
   await page.getByRole("button", { name: "set out", exact: true }).click();
 
-  // Locator.fill() has the same controlled-input replay problem on this slider as it does on
-  // the seek bar (see seekWhilePaused above), so drive it the same way: one native "input" event.
-  await page.locator('input[aria-label="speed"]').evaluate((input: HTMLInputElement) => {
-    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    setValue.call(input, "2");
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await setSpeed(page, 2);
 
   const download = await Promise.all([
     page.waitForEvent("download", { timeout: 60_000 }),
@@ -349,6 +355,39 @@ test("a speed other than 1x exports video only, and says why", async ({ page }) 
     .stdout.toString()
     .trim();
   expect(streams.split("\n")).toEqual(["video"]);
+});
+
+test("a sped-up export of a straddling range reports both the audio and the frame shortfall, not just one", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect
+    .poll(async () => await page.locator(".clock").innerText(), { timeout: 15_000 })
+    .not.toBe("0:00 / 0:00");
+
+  await page.getByRole("button", { name: "pause" }).click();
+  // 5 to 8 straddles the video's 6.625s start (see the straddling test below), and speed 2x
+  // drops audio outright: the two notices this combination produces must not clobber each
+  // other, which is exactly the bug this test exists to catch.
+  await seekWhilePaused(page, 5);
+  await page.getByRole("button", { name: "set in", exact: true }).click();
+  await seekWhilePaused(page, 8);
+  await page.getByRole("button", { name: "set out", exact: true }).click();
+  await setSpeed(page, 2);
+
+  await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    page.getByRole("button", { name: "export mp4", exact: true }).click(),
+  ]);
+
+  const readout = page.locator(".readout");
+  await expect(readout, { message: "audio-dropped notice never appeared" }).toContainText(
+    "audio is dropped when the speed is not 1x",
+    { timeout: 15_000 },
+  );
+  await expect(readout, { message: "frame-shortfall notice never appeared" }).toContainText(
+    "the rest of that range has no video",
+  );
 });
 
 test("a range with no video in it shows a message and downloads nothing", async ({ page }) => {

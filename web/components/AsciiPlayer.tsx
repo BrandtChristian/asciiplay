@@ -11,7 +11,7 @@ import {
   type Layout,
   type RenderMode,
 } from "@/lib/ascii";
-import { audioAvailability } from "@/lib/export/audio";
+import { audioAvailability, AUDIO_READ_FAILURE_REASON } from "@/lib/export/audio";
 import { renderRange, type ExportedFrame, type FrameSource } from "@/lib/export/frames";
 import { encodeGif } from "@/lib/export/gif";
 import { canEncodeMp4, encodeMp4 } from "@/lib/export/mp4";
@@ -402,6 +402,10 @@ export default function AsciiPlayer() {
       new AbortController().signal,
     );
     const received = { count: 0 };
+    // A sped-up export of a range straddling the lead-in drops audio AND under-fills its frame
+    // count at the same time, so these collect rather than each overwriting the last: the user
+    // should learn every reason this file is not quite what they marked, not just the last one.
+    const notices: string[] = [];
     try {
       let blob: Blob;
       if (format === "mp4") {
@@ -410,13 +414,20 @@ export default function AsciiPlayer() {
         let audio: { source: FrameSource; range: Range } | null = null;
         try {
           const availability = await audioAvailability(frameSource, speed);
-          if (availability.kind === "unavailable") setNotice(availability.reason);
+          if (availability.kind === "unavailable") notices.push(availability.reason);
           else audio = { source: frameSource, range: effectiveRange };
         } catch {
-          // Probing audio is a bonus on top of the video export; a failure here should not
-          // sink an otherwise working export, it should just leave the file silent.
+          // audioAvailability said nothing yet, so this is the only place that will: without
+          // it, a probing failure would leave the file silent with no explanation at all.
+          notices.push(AUDIO_READ_FAILURE_REASON);
         }
-        blob = await encodeMp4(countedFrames(frames, received), { fps, width, height, audio });
+        blob = await encodeMp4(countedFrames(frames, received), {
+          fps,
+          width,
+          height,
+          audio,
+          onAudioDropped: (reason) => notices.push(reason),
+        });
       } else {
         blob = await encodeGif(countedFrames(frames, received), { fps, width, height });
       }
@@ -426,10 +437,11 @@ export default function AsciiPlayer() {
       // shorter one starting later than marked. That is worth disclosing even though it is not
       // worth refusing: the marked range itself is a UI concern outside this task's scope.
       if (received.count < timestamps.length) {
-        setNotice(
+        notices.push(
           `exported ${received.count} of ${timestamps.length} frames, the rest of that range has no video`,
         );
       }
+      if (notices.length > 0) setNotice(notices.join("; "));
     } catch (error) {
       // Reachable, not theoretical: any marked range inside this clip's audio-only lead-in has
       // no video sample at all, and renderRange throws for exactly that rather than letting the

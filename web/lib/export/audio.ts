@@ -2,6 +2,14 @@ import type { FrameSource } from "./frames";
 
 export type AudioAvailability = { kind: "available" } | { kind: "unavailable"; reason: string };
 
+/**
+ * Shared between the pre-export availability check and encodeMp4's own late failure path, so a
+ * probing error and a mid-encode error read the same to the user: both mean audioAvailability
+ * said yes but something still went wrong, as opposed to the more specific reasons above, which
+ * mean it said no up front.
+ */
+export const AUDIO_READ_FAILURE_REASON = "could not read the audio, exporting silent";
+
 export function silentBecauseOfSpeed(speed: number): boolean {
   return speed !== 1;
 }

@@ -52,6 +52,14 @@ const CAST_BYTE_LIMIT = 24 * 1024 * 1024;
 
 const BYTES_PER_MB = 1024 * 1024;
 
+/** Long enough for a short, single-reason notice, and the floor a scaled duration never drops below. */
+const MIN_NOTICE_DURATION_MS = 4000;
+// The combined-reasons notice can run past 100 characters and sits in a row that also carries
+// grid size, fps and the filename, so it needs slower-than-silent-reading time to actually be
+// read rather than skimmed. 80ms/character puts the two-reason notice (about 105 characters) at
+// roughly 8.4 seconds, more than double the old fixed 4 seconds it used to get.
+const NOTICE_MS_PER_CHARACTER = 80;
+
 /**
  * Passes frames through unchanged while counting them and reporting each count for the progress
  * readout. renderRange is a generator, so it cannot both yield frames and hand back how many of
@@ -455,7 +463,8 @@ export default function AsciiPlayer() {
 
   useEffect(() => {
     if (!notice) return;
-    const timer = setTimeout(() => setNotice(null), 4000);
+    const duration = Math.max(MIN_NOTICE_DURATION_MS, notice.length * NOTICE_MS_PER_CHARACTER);
+    const timer = setTimeout(() => setNotice(null), duration);
     return () => clearTimeout(timer);
   }, [notice]);
 

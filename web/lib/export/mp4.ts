@@ -17,6 +17,13 @@ export interface Mp4Options {
    * this whole feature exists to remove.
    */
   onAudioDropped?: (reason: string) => void;
+  /**
+   * Checked between the video and audio passes, not just left to the caller: the frame generator
+   * ending early on abort does not throw, so without an explicit check here a cancelled export
+   * still ran a full decode-and-AAC-encode pass over the marked range, which defaults to the
+   * whole clip.
+   */
+  signal: AbortSignal;
 }
 
 export async function canEncodeMp4(): Promise<boolean> {
@@ -104,6 +111,12 @@ export async function encodeMp4(
       index += 1;
     }
 
+    // Aborting stops renderRange from yielding more frames, but the for-await above then simply
+    // ends early rather than throwing, so cancellation would otherwise fall straight through into
+    // the audio pass below, which decodes and AAC-encodes the entire marked range with the cancel
+    // button inert and the progress readout frozen for as long as that takes.
+    options.signal.throwIfAborted();
+
     if (audioMux) {
       try {
         // AudioBufferSource places buffers back to back from its own start (default 0) rather
@@ -121,6 +134,13 @@ export async function encodeMp4(
         options.onAudioDropped?.(AUDIO_READ_FAILURE_REASON);
       }
     }
+  } catch (error) {
+    // mediabunny creates its encoders lazily on the first add(), so by the time either loop
+    // above can throw or be aborted, a real WebCodecs encoder may already be running. Without
+    // this, a throw here (a mid-flight decode error, an abort) abandons the Output and leaks it;
+    // discarding the blob afterward, which is all the caller did before, never releases it.
+    await output.cancel();
+    throw error;
   } finally {
     audioMux?.input.dispose();
   }

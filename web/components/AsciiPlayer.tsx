@@ -419,6 +419,7 @@ export default function AsciiPlayer() {
           height,
           audio,
           onAudioDropped: (reason) => notices.push(reason),
+          signal: controller.signal,
         });
       } else {
         blob = await encodeGif(countedFrames(frames, received, reportProgress), {
@@ -427,9 +428,10 @@ export default function AsciiPlayer() {
           height,
         });
       }
-      // Aborting stops renderRange from yielding more frames, but the encoder still finishes
-      // normally on whatever partial stream it already had, so cancellation has to be caught
-      // here rather than relying on an exception that may never come.
+      // GIF-only by now: encodeMp4 checks the signal itself and throws, landing in the catch
+      // below instead. gifenc has no such check, so an aborted GIF encode still finishes
+      // normally on whatever partial stream renderRange already handed it, and this is what
+      // catches that case rather than relying on an exception that never comes for GIF.
       if (controller.signal.aborted) return;
       download(blob, `asciiplay.${format}`);
       // A range only partly overlapping the available video (this clip's lead-in again, but

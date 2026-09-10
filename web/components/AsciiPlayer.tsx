@@ -60,6 +60,9 @@ const MIN_NOTICE_DURATION_MS = 4000;
 // roughly 8.4 seconds, more than double the old fixed 4 seconds it used to get.
 const NOTICE_MS_PER_CHARACTER = 80;
 
+/** Shared between the format fieldset's hint and exportVideo's own backstop notice, see both. */
+const MP4_UNSUPPORTED_MESSAGE = "this browser cannot encode H.264, so GIF is the only option here";
+
 /**
  * Passes frames through unchanged while counting them and reporting each count for the progress
  * readout. renderRange is a generator, so it cannot both yield frames and hand back how many of
@@ -96,6 +99,9 @@ export default function AsciiPlayer() {
   // Not React state: aborting must be reachable from the cancel button, the unmount cleanup,
   // and exportVideo itself, none of which need a re-render when the controller changes.
   const exportAbortRef = useRef<AbortController | null>(null);
+  // Holds the mediabunny capability probe once started, so probeMp4Support (below) only ever
+  // starts it once no matter how many times hovering or focusing the export controls re-fires.
+  const mp4ProbeRef = useRef<Promise<boolean> | null>(null);
   // Mirrors `grid` state outside React. The rAF loop below is set up once in a [] effect, so
   // reading `grid` state from inside it would always see its initial value; this ref is what
   // makes the comparison against the latest layout actually work across frames. Carries
@@ -183,14 +189,18 @@ export default function AsciiPlayer() {
     if (video) video.muted = muted;
   }, [muted]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void canEncodeMp4().then((supported) => {
-      if (!cancelled) setMp4Supported(supported);
-    });
-    return () => {
-      cancelled = true;
-    };
+  // Deferred off mount on purpose: mediabunny's encoder chunk is 474KB, and probing on mount
+  // fetches it for every visitor, including the ones who never touch export. Running it instead
+  // on the first interaction with the export controls preserves "the initial page load is
+  // untouched by an encoder the visitor may never use". mp4ProbeRef makes this idempotent, so
+  // wiring it to both pointer and keyboard entry into the fieldset is safe to do unconditionally.
+  const probeMp4Support = useCallback((): Promise<boolean> => {
+    if (!mp4ProbeRef.current) {
+      const probe = canEncodeMp4();
+      mp4ProbeRef.current = probe;
+      void probe.then(setMp4Supported);
+    }
+    return mp4ProbeRef.current;
   }, []);
 
   useEffect(() => {
@@ -366,6 +376,19 @@ export default function AsciiPlayer() {
   const exportVideo = useCallback(async () => {
     const layout = layoutRef.current;
     if (!layout) return;
+
+    if (format === "mp4") {
+      // A click can race the hover/focus probe (it may not have resolved yet, or the user may
+      // reach this button by some path that never touched the fieldset at all), so this is the
+      // backstop rather than the only check. Awaiting it here is fine even when it has not
+      // started yet: an MP4 export is already about to load mediabunny's chunk regardless.
+      const supported = await probeMp4Support();
+      if (!supported) {
+        setNotice(MP4_UNSUPPORTED_MESSAGE);
+        return;
+      }
+    }
+
     const fps = fpsFor(format);
     const timestamps = frameTimestamps({ ...effectiveRange, fps, speed });
     const cellWidth = cellWidthFor(shellRef.current!.clientWidth, columns);
@@ -454,7 +477,18 @@ export default function AsciiPlayer() {
       setExportProgress(null);
       exportAbortRef.current = null;
     }
-  }, [charset, columns, download, effectiveRange, format, mode, monoInk, source, speed]);
+  }, [
+    charset,
+    columns,
+    download,
+    effectiveRange,
+    format,
+    mode,
+    monoInk,
+    probeMp4Support,
+    source,
+    speed,
+  ]);
 
   const cancelExport = useCallback(() => {
     exportAbortRef.current?.abort();
@@ -661,14 +695,13 @@ export default function AsciiPlayer() {
             gif
           </button>
           <span className="estimate">{formatEstimate(exportEstimate)}</span>
-          {!mp4Supported ? (
-            <span className="hint">
-              this browser cannot encode H.264, so GIF is the only option here
-            </span>
-          ) : null}
+          {!mp4Supported ? <span className="hint">{MP4_UNSUPPORTED_MESSAGE}</span> : null}
         </fieldset>
 
-        <fieldset>
+        <fieldset
+          onPointerEnter={() => void probeMp4Support()}
+          onFocus={() => void probeMp4Support()}
+        >
           <legend>export</legend>
           <button type="button" onClick={recording ? stopRecording : startRecording}>
             {recording ? "stop" : "record"}

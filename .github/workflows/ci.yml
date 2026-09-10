@@ -39,6 +39,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
 
+      # The e2e suite shells out to ffprobe and ffmpeg to prove an exported MP4 really carries
+      # audio rather than a silent track. The check job above installs ffmpeg for its own
+      # reasons; this job needs it independently, and without it spawnSync returns undefined
+      # streams and the failure reads as an unrelated TypeError.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Show ffprobe version
+        run: ffprobe -version | head -1
+
       - run: bun run format:check
       - run: bun run lint
       - run: bun run typecheck

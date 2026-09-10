@@ -1,4 +1,18 @@
+import { spawnSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
+
+/**
+ * ffprobe and ffmpeg are a CI dependency rather than a given. spawnSync returns undefined
+ * streams when the binary is missing, so the failure would otherwise surface as a TypeError
+ * on `.stdout` and read as a bug in the export rather than a missing tool.
+ */
+function runMediaTool(tool: "ffprobe" | "ffmpeg", args: string[]) {
+  const result = spawnSync(tool, args, { encoding: "utf8" });
+  if (result.error || result.stdout === undefined) {
+    throw new Error(`${tool} is not installed, so this test cannot verify the exported file`);
+  }
+  return { stdout: result.stdout.trim(), stderr: result.stderr ?? "" };
+}
 
 /**
  * The flow that actually matters: the page arrives already playing, and the canvas is really
@@ -279,8 +293,7 @@ test("the exported MP4 carries the source's real audio, not a silent track", asy
   ]).then(([event]) => event);
   const path = await download.path();
 
-  const { spawnSync } = await import("node:child_process");
-  const streams = spawnSync("ffprobe", [
+  const streams = runMediaTool("ffprobe", [
     "-hide_banner",
     "-loglevel",
     "error",
@@ -289,9 +302,7 @@ test("the exported MP4 carries the source's real audio, not a silent track", asy
     "-of",
     "csv=p=0",
     path!,
-  ])
-    .stdout.toString()
-    .trim();
+  ]).stdout;
   // ffprobe's csv output orders fields by its own struct layout regardless of the
   // -show_entries argument order, hence "h264,video" rather than "video,h264".
   expect(streams).toContain("h264,video");
@@ -300,7 +311,7 @@ test("the exported MP4 carries the source's real audio, not a silent track", asy
   // A silent track and a missing one look identical structurally, so decode the audio and read
   // its level: digital silence reports around -91dB, real audio reports far above the floor.
   const SILENCE_FLOOR_DB = -90;
-  const volumeReport = spawnSync("ffmpeg", [
+  const volumeReport = runMediaTool("ffmpeg", [
     "-hide_banner",
     "-i",
     path!,
@@ -311,7 +322,7 @@ test("the exported MP4 carries the source's real audio, not a silent track", asy
     "-f",
     "null",
     "-",
-  ]).stderr.toString();
+  ]).stderr;
   const meanVolumeMatch = volumeReport.match(/mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/);
   expect(meanVolumeMatch, `no mean_volume in ffmpeg output:\n${volumeReport}`).not.toBeNull();
   expect(Number(meanVolumeMatch![1])).toBeGreaterThan(SILENCE_FLOOR_DB);
@@ -341,8 +352,7 @@ test("a speed other than 1x exports video only, and says why", async ({ page }) 
     message: "speed-drops-audio notice never appeared",
   }).toContainText("audio is dropped when the speed is not 1x", { timeout: 15_000 });
 
-  const { spawnSync } = await import("node:child_process");
-  const streams = spawnSync("ffprobe", [
+  const streams = runMediaTool("ffprobe", [
     "-hide_banner",
     "-loglevel",
     "error",
@@ -351,9 +361,7 @@ test("a speed other than 1x exports video only, and says why", async ({ page }) 
     "-of",
     "csv=p=0",
     path!,
-  ])
-    .stdout.toString()
-    .trim();
+  ]).stdout;
   expect(streams.split("\n")).toEqual(["video"]);
 });
 
